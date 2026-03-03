@@ -1,6 +1,17 @@
 
+from django.core.exceptions import ValidationError
 from django.db import models
-from versions.models import Version
+from versions.models import IngestVersion
+
+
+def validate_ena_sample(value):
+    if value and not value.startswith(("ERS", "SRS", "DRS")):
+        raise ValidationError("ena_sample must start with ERS, SRS, or DRS")
+
+
+def validate_biosample(value):
+    if value and not value.startswith("SAM"):
+        raise ValidationError("biosample must start with SAM")
 
 
 class Sample(models.Model):
@@ -26,12 +37,13 @@ class Sample(models.Model):
         ENA = "ENA"
 
 
-    biosample_accession = models.CharField(max_length=50, unique=True)
+    ena_sample = models.CharField(max_length=50, null=True, blank=True, unique=True, validators=[validate_ena_sample])
+    biosample = models.CharField(max_length=50, null=True, blank=True, unique=True, validators=[validate_biosample])
 
     source_dataset = models.CharField(max_length=50, default="", choices=SourceDataset.choices)
 
-    # link to Version
-    version = models.ForeignKey(Version, on_delete=models.PROTECT, null=True, blank=True)
+    # link to ingest version
+    ingest = models.ForeignKey(IngestVersion, on_delete=models.PROTECT, null=True, blank=True)
 
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
@@ -47,4 +59,4 @@ class Sample(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.biosample_accession
+        return self.biosample or self.ena_sample or "Unnamed Sample"

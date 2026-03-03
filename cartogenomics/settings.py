@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     "versions",
     "samples",
     "genomes",
+    "external",
+    "runs"
 ]
 
 MIDDLEWARE = [

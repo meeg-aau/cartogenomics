@@ -3,9 +3,9 @@ from samples.models import Sample
 from versions.models import IngestVersion
 
 
-class Genome(models.Model):
+class Run(models.Model):
     """
-    Represents a genome or MAG linked to a sample.
+    Represents a sequencing run (e.g. ENA/SRA run accession).
     """
 
     accession = models.CharField(max_length=100)
@@ -13,23 +13,24 @@ class Genome(models.Model):
     sample = models.ForeignKey(
         Sample,
         on_delete=models.CASCADE,
-        related_name="genomes",
+        related_name="runs",
     )
 
     ingest = models.ForeignKey(
         IngestVersion,
         on_delete=models.PROTECT,
-        related_name="genomes",
+        related_name="runs",
     )
 
-    # Quality metrics
-    completeness = models.FloatField(null=True, blank=True)
-    contamination = models.FloatField(null=True, blank=True)
-    genome_size = models.BigIntegerField(null=True, blank=True)
-    n50 = models.BigIntegerField(null=True, blank=True)
+    read_count = models.BigIntegerField(null=True, blank=True)
 
+    sequencer = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Sequencing platform, e.g. Illumina NovaSeq 6000",
+    )
 
-    taxonomy = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
