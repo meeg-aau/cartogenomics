@@ -1,3 +1,4 @@
+from importlib.metadata import metadata
 from typing import List, Dict, Optional, Any
 
 import requests
@@ -16,7 +17,6 @@ class ENAClient:
     def __init__(self, api_config: config.ENAConfig = None):
         self.config = api_config or config.ENAConfig()
         self.portal_api_root = self.config.portal_api_root
-        self.browser_api_root = self.config.browser_api_root
 
     def get_request(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
         retry = 0
@@ -36,157 +36,68 @@ class ENAClient:
             retry += 1
         return []
 
-    # def get_sample_accessions(self, acc: str) -> Dict[str, Optional[str]]:
-    #     acc_type = get_accession_type(acc)
-    #     result = []
-    #     if acc_type == "run":
-    #         result = self.get_request(
-    #             {
-    #                 "result": self.config.run_query,
-    #                 "query": f"run_accession={acc}",
-    #             }
-    #         )
-    #     elif acc_type == "experiment":
-    #         result = self.get_request(
-    #             {
-    #                 "result": self.config.experiment_query,
-    #                 "query": f"experiment_accession={acc}",
-    #             }
-    #         )
-    #     elif acc_type in ["sample", "biosample"]:
-    #         result = self.get_request(
-    #             {
-    #                 "result": self.config.sample_query,
-    #                 "query": f"sample_accession={acc} OR secondary_sample_accession={acc}",
-    #             }
-    #         )
-    #
-    #     if not result:
-    #         return {"biosample": None, "ena_sample": None}
-    #
-    #     # Take the first record to find sample accessions
-    #     record = result[0]
-    #     samples = [record.get("sample_accession"), record.get("secondary_sample_accession")]
-    #     return {
-    #         "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
-    #         "ena_sample": next(
-    #             (i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None
-    #         ),
-    #     }
-
-    def get_all_accessions(self, acc: str) -> List[Dict[str, Optional[str]]]:
+    def get_all_accessions(self, acc: str) -> Dict[str, Optional[str]]:
         """
         Find all related accessions (run, experiment, biosample, ena_sample) starting from any.
         """
         acc_type = get_accession_type(acc)
         if acc_type == "run":
             query = f"run_accession={acc}"
+            result = self.config.run_query
         elif acc_type == "experiment":
             query = f"experiment_accession={acc}"
+            result = self.config.experiment_query
         elif acc_type in ["sample", "biosample"]:
             query = f"sample_accession={acc} OR secondary_sample_accession={acc}"
+            result = self.config.sample_query
         else:
-            return []
+            return {}
 
-        # We query the run result to get the full mapping
-        run_data = self.get_request(
+        # query the run result to get the full mapping
+        ena_data = self.get_request(
             {
-                "result": self.config.run_query,
+                "result": result,
                 "query": query,
+                "fields": ["all"],
             }
         )
 
-        accessions = []
-        for run in run_data:
-            samples = [run.get("sample_accession"), run.get("secondary_sample_accession")]
-            acc_dict = {
-                "ena_run": run.get("run_accession"),
-                "ena_experiment": run.get("experiment_accession"),
-                "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
-                "ena_sample": next(
-                    (i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None
-                ),
-            }
-            accessions.append(acc_dict)
-        return accessions
+        ena_metadata = ena_data[0]
+        samples = [ena_metadata.get("sample_accession"), ena_metadata.get("secondary_sample_accession")]
+        acc_dict = {
+            "ena_run": ena_metadata.get("run_accession"),
+            "ena_experiment": ena_metadata.get("experiment_accession"),
+            "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
+            "ena_sample": next(
+                (i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None
+            ),
+        }
+
+        return acc_dict
 
     def fetch_run_metadata(self, run_acc: str) -> List[Dict[str, Any]]:
-        return self.get_request(
+        ena_data =  self.get_request(
             {
                 "result": self.config.run_query,
                 "query": f"run_accession={run_acc}",
             }
         )
+        run_data = {}
+        for field in self.config.run_fields:
+            run_data[field] = ena_data[0].get(field)
+        return [run_data]
 
-    def fetch_experiment_metadata(self, exp_acc: str) -> List[Dict[str, Any]]:
-        return self.get_request(
-            {
-                "result": self.config.experiment_query,
-                "query": f"experiment_accession={exp_acc}",
-            }
-        )
 
-    def fetch_sample_metadata(self, sample_acc: str) -> List[Dict[str, Any]]:
-        return self.get_request(
-            {
-                "result": self.config.sample_query,
-                "query": f"sample_accession={sample_acc} OR secondary_sample_accession={sample_acc}",
-            }
-        )
 
-#
-# # Backward compatibility wrappers
-#
-#
-# def run_to_sample(run_acc: str) -> Dict[str, Optional[str]]:
-#     return ENAClient().get_all_accessions(run_acc)
-#
-#
-# def experiment_to_sample(exp_acc: str) -> Dict[str, Optional[str]]:
-#     return ENAClient().get_sample_accessions(exp_acc)
-#
-#
-# def get_sample(acc: str) -> Dict[str, Optional[str]]:
-#     return ENAClient().get_sample_accessions(acc)
-#
-#
-# def get_request(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-#     return ENAClient().get_request(data)
-#
-#
-# def get_sample_accession(acc: str) -> Dict[str, Optional[str]]:
-#     return ENAClient().get_sample_accessions(acc)
-#
-#
-# def get_run_from_sample(acc: str) -> List[Dict[str, Any]]:
-#     client = ENAClient()
-#     request_data = {
-#         "result": client.config.run_query,
-#         "query": f"sample_accession={acc} OR secondary_sample_accession={acc}",
-#     }
-#     return client.get_request(request_data)
-#
-#
-# def get_experiment_from_sample(acc: str) -> List[Dict[str, Any]]:
-#     client = ENAClient()
-#     request_data = {
-#         "result": client.config.experiment_query,
-#         "query": f"sample_accession={acc} OR secondary_sample_accession={acc}",
-#     }
-#     return client.get_request(request_data)
-#
-#
-# def get_accessions(run_data: List[Dict[str, Any]]) -> List[Dict[str, Optional[str]]]:
-#     accessions = []
-#     for run in run_data:
-#         samples = [run.get("sample_accession"), run.get("secondary_sample_accession")]
-#         acc_dict = {
-#             "ena_run": run.get("run_accession"),
-#             "ena_experiment": run.get("experiment_accession"),
-#             "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
-#             "ena_sample": next(
-#                 (i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None
-#             ),
-#         }
-#         accessions.append(acc_dict)
-#     return accessions
+    # # can remove if all fields are covered in the run query
+    # def fetch_experiment_metadata(self, exp_acc: str) -> List[Dict[str, Any]]:
+    #     return self.get_request(
+    #         {
+    #             "result": self.config.experiment_query,
+    #             "query": f"experiment_accession={exp_acc}",
+    #         }
+    #     )
+
+
+ena_api = ENAClient()
+ena_api.get_all_accessions("ERR10708697")

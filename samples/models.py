@@ -54,6 +54,11 @@ class Sample(models.Model):
     geography_status_reason = models.CharField(max_length=1000, null=True, blank=True, choices=GeographyStatusReason.choices)
 
     raw_metadata = models.JSONField(default=dict, blank=True)
+    
+    # Genome specific fields
+    completeness_score = models.FloatField(null=True, blank=True)
+    contamination_score = models.FloatField(null=True, blank=True)
+    completeness_software = models.CharField(max_length=100, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

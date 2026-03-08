@@ -12,15 +12,13 @@ class ENAConfig(BaseModel):
     portal_api_root: AnyHttpUrl = AnyHttpUrl(
         "https://www.ebi.ac.uk/ena/portal/api/search?"
     )
-    browser_api_root: AnyHttpUrl = AnyHttpUrl(
-        "https://www.ebi.ac.uk/ena/browser/api/xml/"
-    )
+
     run_query: str = "read_run"
-    experiment_query: str = "read_experiment"
     sample_query: str = "sample"
     retry_count: int = 3
     timeout: int = 30
     portal_api_output: dict = {"format": "json", "fields": ["all"]}
+    run_fields: list = ["read_count","last_updated","fastq_ftp","library_source","library_strategy","instrument_model", "instrument_platform"]
 
     # analysis_api: str = "analysis"  # TBC
 
