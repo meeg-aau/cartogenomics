@@ -3,6 +3,7 @@ from django.core.management import call_command
 from unittest.mock import patch, MagicMock
 from samples.models import Sample
 from versions.models import IngestVersion
+from external.models import ExternalResource
 from django.core.management.base import CommandError
 import io
 
@@ -82,6 +83,17 @@ class IngestSampleTest(TestCase):
         self.assertEqual(version.upstream_last_modified.year, 2025)
         self.assertEqual(version.upstream_last_modified.month, 1)
         self.assertEqual(version.upstream_last_modified.day, 22)
+
+        # Verify ExternalResource was created
+        ext = ExternalResource.objects.get(
+            source_system=ExternalResource.SourceSystem.BIOSAMPLES,
+            accession="SAMN40012083",
+            ingest=version
+        )
+        self.assertEqual(ext.sample, sample)
+        self.assertIsNone(ext.run)
+        self.assertIsNone(ext.genome)
+        self.assertEqual(ext.url, "https://www.ebi.ac.uk/biosamples/samples/SAMN40012083")
 
     @patch("samples.management.commands.ingest_sample.ena_api")
     @patch("samples.management.commands.ingest_sample.get_basic_sample_data")

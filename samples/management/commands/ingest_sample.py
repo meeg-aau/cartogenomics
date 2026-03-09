@@ -4,8 +4,9 @@ from django.db import transaction
 
 from versions.models import IngestVersion, CartogenomicsRelease
 from samples.models import Sample
+from external.models import ExternalResource
 
-from api_fetch.biosamples import get_basic_sample_data
+from api_fetch.biosamples import get_basic_sample_data, BASE_URL
 from api_fetch.ena import ENAClient
 from sample_metadata_curation.curate import curate_biosample
 
@@ -176,6 +177,22 @@ class Command(BaseCommand):
             )
         except Exception as e:
             raise CommandError(f"Failed to create/update Sample for {accession}: {e}")
+
+        # Populate ExternalResource for BioSamples
+        try:
+            ExternalResource.objects.update_or_create(
+                source_system=ExternalResource.SourceSystem.BIOSAMPLES,
+                accession=sample.biosample,
+                ingest=version,
+                defaults={
+                    "url": f"{BASE_URL}/{sample.biosample}",
+                    "sample": sample,
+                    "run": None,
+                    "genome": None,
+                },
+            )
+        except Exception as e:
+            raise CommandError(f"Failed to create/update ExternalResource for {accession}: {e}")
 
         self.stdout.write(
             self.style.SUCCESS(

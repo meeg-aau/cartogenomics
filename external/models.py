@@ -59,10 +59,10 @@ class ExternalResource(models.Model):
         #   external resource can only have one of: sample, run, or genome
         constraints = [
             CheckConstraint(
-                check = (
-                (Q(sample__isnull=False) & Q(run__isnull=False) & Q(genome__isnull=True)) |
-                (Q(sample__isnull=False) & Q(run__isnull=True) & Q(genome__isnull=False)) |
-                (Q(sample__isnull=False) & Q(run__isnull=False) & Q(genome__isnull=True))
+                check=(
+                    (Q(sample__isnull=False) & Q(run__isnull=True) & Q(genome__isnull=True)) |
+                    (Q(sample__isnull=True) & Q(run__isnull=False) & Q(genome__isnull=True)) |
+                    (Q(sample__isnull=True) & Q(run__isnull=True) & Q(genome__isnull=False))
                 ),
                 name="externalresource_has_only_one_target",
             ),
