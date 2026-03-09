@@ -7,7 +7,7 @@ from samples.models import Sample
 
 from api_fetch.biosamples import get_basic_sample_data
 from api_fetch.ena import ENAClient
-from sample_metadata_curation import curate_biosample
+from sample_metadata_curation.curate import curate_biosample
 
 ena_api = ENAClient()
 
