@@ -1,3 +1,14 @@
 from django.contrib import admin
+from .models import IngestVersion, CartogenomicsRelease
 
-# Register your models here.
+
+@admin.register(IngestVersion)
+class IngestVersionAdmin(admin.ModelAdmin):
+    list_display = ("label", "retrieved_at", "created_at")
+    search_fields = ("label", "notes")
+
+
+@admin.register(CartogenomicsRelease)
+class CartogenomicsReleaseAdmin(admin.ModelAdmin):
+    list_display = ("label", "created_at")
+    search_fields = ("label",)
