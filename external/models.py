@@ -55,7 +55,6 @@ class ExternalResource(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("source_system", "accession", "ingest")
         #   external resource can only have one of: sample, run, or genome
         constraints = [
             CheckConstraint(

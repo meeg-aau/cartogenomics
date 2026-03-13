@@ -15,10 +15,12 @@ class ENAConfig(BaseModel):
 
     run_query: str = "read_run"
     sample_query: str = "sample"
+    genome_query: str = "wgs_set"
     retry_count: int = 3
     timeout: int = 30
     portal_api_output: dict = {"format": "json", "fields": ["all"]}
     run_fields: list = ["read_count","last_updated","fastq_ftp","library_source","library_strategy","instrument_model", "instrument_platform"]
+    genome_fields: list = ["assembly_accession"]
 
     # analysis_api: str = "analysis"  # TBC
 

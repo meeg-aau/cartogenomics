@@ -72,7 +72,7 @@ class Command(BaseCommand):
 
         # Get related accessions from ENA
         try:
-            accs = ena_api.get_all_accessions(accession)
+            accs = ena_api.get_all_run_accessions(accession)
             biosample_acc = accs.get("biosample")
             ena_sample_acc = accs.get("ena_sample")
         except Exception as e:
@@ -169,6 +169,7 @@ class Command(BaseCommand):
                     "completeness_software": curated.get("completeness_software"),
                 }
             )
+
 
         try:
             sample, created = Sample.objects.update_or_create(
