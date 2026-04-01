@@ -28,7 +28,7 @@ class IngestVersion(models.Model):
     source_system = models.CharField(max_length=32, choices=SourceSystem.choices)
     data_type = models.CharField(max_length=32, choices=DataType.choices)
     upstream_version = models.CharField(max_length=100, blank=True, default="")
-    upstream_last_modified = models.DateTimeField(null=True, blank=True)
+    last_modified_internal = models.DateTimeField(null=True, blank=True)
     pipeline_version = models.CharField(max_length=100, blank=True, default="")
 
     release = models.ForeignKey(
@@ -41,7 +41,6 @@ class IngestVersion(models.Model):
 
     retrieved_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
-    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ("source_system", "data_type", "label")

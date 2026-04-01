@@ -53,6 +53,8 @@ class ExternalResource(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+    last_modified_external = models.DateTimeField(null=True, blank=True)
+    first_created_external = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         #   external resource can only have one of: sample, run, or genome

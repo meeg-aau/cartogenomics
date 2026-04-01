@@ -6,16 +6,78 @@ from runs.models import Run
 from versions.models import IngestVersion
 from external.models import ExternalResource
 
-from api_fetch.ena import get_run_from_sample  # <-- your existing function
+from api_fetch.ena import ENAClient
+
+ena_api = ENAClient()
 
 
 class Command(BaseCommand):
-    help = "Fetch ENA runs for a BioSample accession and store them in the Run table."
+    help = "Fetch ENA runs and store them in the Run table."
 
     def add_arguments(self, parser):
-        parser.add_argument("--biosample", "-b", required=True, type=str, help="BioSample accession (SAMN/SAMEA...)")
-        parser.add_argument("--ingest-label", "-l", required=True, type=str, help="Ingest label, e.g. mfd_2026_01_15_ena_runs")
-        parser.add_argument("--release", "-r", default=None, type=str, help="Cartogenomics release label (optional)")
+        parser.add_argument(
+            "--accession",
+            "-a",
+            type=str,
+            required=True,
+            help="Accession, e.g. SAME..., ERR..., ERX..., ERS...",
+        )
+        parser.add_argument(
+            "--source",
+            "-s",
+            type=str,
+            required=True,
+            help='Source dataset label, e.g. "MFD"',
+        )
+        parser.add_argument(
+            "--sample-type",
+            "-t",
+            type=str,
+            default="run",
+            choices=["run", "genome"],
+            help="Type of sample: run or genome",
+        )
+        parser.add_argument(
+            "--version-label",
+            "-vl",
+            type=str,
+            required=True,
+            help='Version label, e.g. "mfd_2026_01_15"',
+        )
+        parser.add_argument(
+            "--pipeline-version",
+            "-pv",
+            type=str,
+            default="sample_metadata_curation 0.1.0",
+            help='Pipeline version, e.g. "sample_metadata_curation 0.1.0"',
+        )
+        parser.add_argument(
+            "--release-label",
+            "-rl",
+            type=str,
+            default="1.0",
+            help='Cartogenomics release label, default is "1.0"',
+        )
+
+
+    @transaction.atomic
+    def handle(self, *args, **opts):
+        accession = opts["accession"]
+        source_dataset = opts["source"]
+        version_label = opts["version_label"]
+        sample_type = opts["sample_type"]
+        pipeline_version = opts["pipeline_version"]
+        release_label = opts["release_label"]
+
+        # Get related accessions from ENA
+        try:
+            accs = ena_api.get_all_run_accessions(accession)
+            biosample_acc = accs.get("biosample")
+            ena_sample_acc = accs.get("ena_sample")
+        except Exception as e:
+            raise CommandError(f"Failed to get accessions for {accession}: {e}")
+
+
 
     @transaction.atomic
     def handle(self, *args, **opts):

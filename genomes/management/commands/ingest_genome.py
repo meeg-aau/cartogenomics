@@ -6,7 +6,7 @@ from genomes.models import Genome
 from versions.models import IngestVersion, CartogenomicsRelease
 from external.models import ExternalResource
 
-from api_fetch.biosamples import get_basic_sample_data, BASE_URL
+from api_fetch.biosamples import get_basic_sample_data
 from api_fetch.ena import ENAClient
 from sample_metadata_curation.curate import curate_biosample
 
