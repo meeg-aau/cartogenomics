@@ -57,12 +57,17 @@ class Command(BaseCommand):
 
         # Resolve all related accessions from ENA
         try:
-            accs = ena_api.get_all_run_accessions(accession)
-            run_acc = accs.get("ena_run")
-            biosample_acc = accs.get("biosample")
-            ena_sample_acc = accs.get("ena_sample")
+            runs_data = ena_api.get_all_run_accessions(accession)
         except Exception as e:
             raise CommandError(f"Failed to resolve accessions for {accession}: {e}")
+
+        if not runs_data:
+            raise CommandError(f"Could not resolve a run accession from {accession}")
+
+        run_item = runs_data[0]
+        run_acc = run_item.get("run_accession")
+        biosample_acc = run_item.get("biosample")
+        ena_sample_acc = run_item.get("ena_sample")
 
         if not run_acc:
             raise CommandError(f"Could not resolve a run accession from {accession}")
@@ -83,11 +88,7 @@ class Command(BaseCommand):
                 f"Sample not found for {lookup}. Run ingest_sample first."
             )
 
-        # Fetch run metadata from ENA
-        try:
-            run_data = ena_api.fetch_run_metadata(run_acc)
-        except Exception as e:
-            raise CommandError(f"Failed to fetch run metadata for {run_acc}: {e}")
+        run_data = run_item
 
         # Parse ENA date fields
         def parse_date(raw):

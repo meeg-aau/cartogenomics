@@ -3,9 +3,11 @@ import logging
 from datetime import datetime
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from versions.models import IngestVersion, CartogenomicsRelease
 from samples.models import Sample
+from runs.models import Run
 from external.models import ExternalResource
 
 from api_fetch.biosamples import get_basic_sample_data, BASE_URL
@@ -55,6 +57,11 @@ class Command(BaseCommand):
             default="1.0",
             help='Cartogenomics release label, default is "1.0"',
         )
+        parser.add_argument(
+            "--no-runs",
+            action="store_true",
+            help="Skip run ingestion (sample metadata only)",
+        )
 
     @transaction.atomic
     def handle(self, *args, **opts):
@@ -63,14 +70,15 @@ class Command(BaseCommand):
         version_label = opts["version_label"]
         pipeline_version = opts["pipeline_version"]
         release_label = opts["release_label"]
+        no_runs = opts["no_runs"]
 
         logger.info(f"Starting ingest for accession: {accession}")
 
         # Get related accessions from ENA
         try:
-            accs = ena_api.get_all_run_accessions(accession)
-            biosample_acc = accs.get("biosample")
-            ena_sample_acc = accs.get("ena_sample")
+            runs_data = ena_api.get_all_run_accessions(accession)
+            biosample_acc = runs_data[0].get("biosample") if runs_data else None
+            ena_sample_acc = runs_data[0].get("ena_sample") if runs_data else None
         except Exception as e:
             raise CommandError(f"Failed to get accessions for {accession}: {e}")
 
@@ -224,6 +232,102 @@ class Command(BaseCommand):
             raise CommandError(f"Failed to create/update ExternalResource for {accession}: {e}")
 
         logger.info(f"Ingest complete for {fetch_acc}")
+
+        if not no_runs and runs_data:
+            run_ingest, _ = IngestVersion.objects.update_or_create(
+                source_system=IngestVersion.SourceSystem.ENA,
+                data_type=IngestVersion.DataType.READS,
+                label=version_label,
+                defaults={
+                    "pipeline_version": pipeline_version,
+                    "release": release,
+                },
+            )
+
+            def _parse_date(raw):
+                if not raw:
+                    return None
+                try:
+                    return timezone.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+
+            for run_item in runs_data:
+                run_acc = run_item.get("run_accession")
+                if not run_acc:
+                    continue
+
+                ena_first_created = _parse_date(run_item.get("first_created"))
+                ena_last_updated = _parse_date(run_item.get("last_updated"))
+
+                run_curated = {
+                    "sample": sample,
+                    "read_count": run_item.get("read_count"),
+                    "sequencer": run_item.get("instrument_model") or run_item.get("instrument_platform"),
+                    "library_source": run_item.get("library_source"),
+                    "library_strategy": run_item.get("library_strategy"),
+                }
+
+                previous_run_ingest = None
+                try:
+                    existing_run = Run.objects.get(accession=run_acc)
+                    changed = [f for f, v in run_curated.items() if getattr(existing_run, f) != v]
+                    if changed:
+                        logger.info(f"Run {run_acc} changed fields: {changed}. Recording previous ingest.")
+                        previous_run_ingest = existing_run.ingest
+                    else:
+                        logger.info(f"Run {run_acc} — no fields changed.")
+                except Run.DoesNotExist:
+                    logger.info(f"Run {run_acc} not found — will be created.")
+
+                run_defaults = {**run_curated, "ingest": run_ingest}
+                if previous_run_ingest is not None:
+                    run_defaults["previous_ingest"] = previous_run_ingest
+
+                run_obj, run_created = Run.objects.update_or_create(
+                    accession=run_acc,
+                    defaults=run_defaults,
+                )
+
+                ExternalResource.objects.update_or_create(
+                    source_system=ExternalResource.SourceSystem.ENA,
+                    accession=run_acc,
+                    ingest=run_ingest,
+                    defaults={
+                        "url": f"https://www.ebi.ac.uk/ena/browser/view/{run_acc}",
+                        "run": run_obj,
+                        "sample": None,
+                        "genome": None,
+                        "first_created_external": ena_first_created,
+                        "last_modified_external": ena_last_updated,
+                    },
+                )
+
+                fastq_ftp = run_item.get("fastq_ftp") or ""
+                for ftp_path in fastq_ftp.split(";"):
+                    ftp_path = ftp_path.strip()
+                    if not ftp_path:
+                        continue
+                    url = f"https://{ftp_path}" if not ftp_path.startswith("http") else ftp_path
+                    filename = ftp_path.split("/")[-1]
+                    ExternalResource.objects.update_or_create(
+                        source_system=ExternalResource.SourceSystem.ENA,
+                        accession=filename,
+                        ingest=run_ingest,
+                        defaults={
+                            "url": url,
+                            "run": run_obj,
+                            "sample": None,
+                            "genome": None,
+                            "first_created_external": ena_first_created,
+                            "last_modified_external": ena_last_updated,
+                        },
+                    )
+
+                logger.info(f"{'Created' if run_created else 'Updated'} Run {run_acc}")
+
+            logger.info(f"Ingested {len(runs_data)} run(s) for {fetch_acc}")
+
         self.stdout.write(
             self.style.SUCCESS(
                 f"{'Created' if created else 'Updated'} Sample {sample}"

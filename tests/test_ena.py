@@ -59,18 +59,19 @@ class TestGetAllRunAccessions(unittest.TestCase):
         logging.info("\nTesting get_all_run_accessions from run accession")
         mock_get.return_value = [MOCK_RUN_RECORD]
         result = self.client.get_all_run_accessions("ERR123456")
-        assert result["ena_run"] == "ERR123456"
-        assert result["ena_experiment"] == "ERX123456"
-        assert result["biosample"] == "SAMEA654321"
-        assert result["ena_sample"] == "ERS654321"
+        assert len(result) == 1
+        assert result[0]["run_accession"] == "ERR123456"
+        assert result[0]["experiment_accession"] == "ERX123456"
+        assert result[0]["biosample"] == "SAMEA654321"
+        assert result[0]["ena_sample"] == "ERS654321"
 
     @patch("api_fetch.ena.ENAClient.get_request")
     def test_from_biosample_accession(self, mock_get):
         logging.info("\nTesting get_all_run_accessions from biosample accession")
         mock_get.return_value = [MOCK_RUN_RECORD]
         result = self.client.get_all_run_accessions("SAMEA654321")
-        assert result["biosample"] == "SAMEA654321"
-        assert result["ena_sample"] == "ERS654321"
+        assert result[0]["biosample"] == "SAMEA654321"
+        assert result[0]["ena_sample"] == "ERS654321"
 
     @patch("api_fetch.ena.ENAClient.get_request")
     def test_biosample_in_secondary_field(self, mock_get):
@@ -82,48 +83,25 @@ class TestGetAllRunAccessions(unittest.TestCase):
             "secondary_sample_accession": "SAMEA654321",
         }]
         result = self.client.get_all_run_accessions("ERR123456")
-        assert result["biosample"] == "SAMEA654321"
-        assert result["ena_sample"] == "ERS654321"
+        assert result[0]["biosample"] == "SAMEA654321"
+        assert result[0]["ena_sample"] == "ERS654321"
+
+    @patch("api_fetch.ena.ENAClient.get_request")
+    def test_multiple_runs_returned(self, mock_get):
+        logging.info("\nTesting get_all_run_accessions returns all runs for a biosample")
+        mock_get.return_value = [
+            {**MOCK_RUN_RECORD, "run_accession": "ERR111111"},
+            {**MOCK_RUN_RECORD, "run_accession": "ERR222222"},
+        ]
+        result = self.client.get_all_run_accessions("SAMEA654321")
+        assert len(result) == 2
+        assert result[0]["run_accession"] == "ERR111111"
+        assert result[1]["run_accession"] == "ERR222222"
 
     def test_unknown_accession_returns_empty(self):
         logging.info("\nTesting get_all_run_accessions with unknown accession")
         result = self.client.get_all_run_accessions("UNKNOWN123")
-        assert result == {}
-
-
-class TestFetchRunMetadata(unittest.TestCase):
-    client = ENAClient()
-
-    @patch("api_fetch.ena.ENAClient.get_request")
-    def test_returns_all_run_fields(self, mock_get):
-        logging.info("\nTesting fetch_run_metadata returns all expected fields")
-        mock_get.return_value = [{
-            "read_count": "42000000",
-            "first_created": "2024-01-15",
-            "last_updated": "2024-01-16",
-            "fastq_ftp": "ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456_1.fastq.gz",
-            "library_source": "METAGENOMIC",
-            "library_strategy": "WGS",
-            "instrument_model": "Illumina NovaSeq 6000",
-            "instrument_platform": "ILLUMINA",
-        }]
-        result = self.client.fetch_run_metadata("ERR123456")
-        assert result["read_count"] == "42000000"
-        assert result["library_source"] == "METAGENOMIC"
-        assert result["library_strategy"] == "WGS"
-        assert result["instrument_model"] == "Illumina NovaSeq 6000"
-        assert result["fastq_ftp"] == "ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456_1.fastq.gz"
-        assert result["first_created"] == "2024-01-15"
-        assert result["last_updated"] == "2024-01-16"
-
-    @patch("api_fetch.ena.ENAClient.get_request")
-    def test_missing_fields_return_none(self, mock_get):
-        logging.info("\nTesting fetch_run_metadata with missing fields returns None")
-        mock_get.return_value = [{"read_count": "1000"}]
-        result = self.client.fetch_run_metadata("ERR123456")
-        assert result["read_count"] == "1000"
-        assert result["instrument_model"] is None
-        assert result["fastq_ftp"] is None
+        assert result == []
 
 
 class TestGetAllGenomeAccessions(unittest.TestCase):

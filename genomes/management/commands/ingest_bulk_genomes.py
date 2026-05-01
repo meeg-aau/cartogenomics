@@ -3,54 +3,48 @@ from django.core.management import call_command
 
 
 class Command(BaseCommand):
-    help = "Bulk ingest samples from a file with one accession per line"
+    help = "Bulk ingest genomes from a file with one accession per line"
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--file",
             "-f",
             required=True,
-            help="File containing one accession per line",
+            help="File containing one accession per line (GCA or sample accessions)",
         )
         parser.add_argument(
             "--source",
             "-s",
             required=True,
-            help='Source dataset label, e.g. "MFD"',
-        )
-        parser.add_argument(
-            "--no-runs",
-            action="store_true",
-            help="Skip run ingestion for each sample (sample metadata only)",
+            help='Source system, e.g. "MFD", "GTDB", "MGNIFY"',
         )
         parser.add_argument(
             "--version-label",
             "-vl",
             required=True,
-            help='Version label, e.g. "mfd_2026_01_15"',
+            help='Version label, e.g. "mfd_genomes_2026_02_10"',
         )
         parser.add_argument(
             "--pipeline-version",
             "-pv",
-            default="sample_metadata_curation 0.1.0",
-            help='Pipeline version, e.g. "sample_metadata_curation 0.1.0"',
+            default="",
+            help="Pipeline version string",
         )
         parser.add_argument(
             "--release-label",
             "-rl",
             default="1.0",
-            help='Cartogenomics release label, default is "1.0"',
+            help='Cartogenomics release label, default "1.0"',
         )
         parser.add_argument(
             "--continue-on-error",
             action="store_true",
-            help="Continue processing even if one accession fails",
+            help="Continue processing remaining accessions if one fails",
         )
 
     def handle(self, *args, **options):
         file_path = options["file"]
         source = options["source"]
-        no_runs = options["no_runs"]
         version_label = options["version_label"]
         pipeline_version = options["pipeline_version"]
         release_label = options["release_label"]
@@ -60,23 +54,21 @@ class Command(BaseCommand):
             accessions = [x.strip() for x in f if x.strip() and not x.startswith("#")]
 
         total = len(accessions)
-        self.stdout.write(f"Processing {total} accessions")
+        self.stdout.write(f"Processing {total} genome accessions")
 
         success = 0
         failed = 0
 
         for i, acc in enumerate(accessions, start=1):
             self.stdout.write(f"[{i}/{total}] {acc}")
-
             try:
                 call_command(
-                    "ingest_sample",
+                    "ingest_genome",
                     accession=acc,
                     source=source,
                     version_label=version_label,
                     pipeline_version=pipeline_version,
                     release_label=release_label,
-                    no_runs=no_runs,
                 )
                 success += 1
             except Exception as e:
@@ -85,8 +77,4 @@ class Command(BaseCommand):
                 if not continue_on_error:
                     raise
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Finished. Success: {success}, Failed: {failed}"
-            )
-        )
+        self.stdout.write(self.style.SUCCESS(f"Finished. Success: {success}, Failed: {failed}"))

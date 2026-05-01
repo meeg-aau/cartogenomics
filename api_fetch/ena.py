@@ -35,56 +35,46 @@ class ENAClient:
             retry += 1
         return []
 
-    def get_all_run_accessions(self, acc: str) -> Dict[str, Optional[str]]:
+    def get_all_run_accessions(self, acc: str) -> List[Dict[str, Any]]:
         """
-        Find all related accessions (run, experiment, biosample, ena_sample) starting from any.
+        Return all runs associated with any ENA accession (run, experiment, biosample, sample).
+        Queries read_run directly for all input types — each returned dict contains both
+        resolved accession info and full run metadata.
         """
         acc_type = get_accession_type(acc)
         if acc_type == "run":
             query = f"run_accession={acc}"
-            result = self.config.run_query
         elif acc_type == "experiment":
             query = f"experiment_accession={acc}"
-            result = self.config.experiment_query
         elif acc_type in ["sample", "biosample"]:
             query = f"sample_accession={acc} OR secondary_sample_accession={acc}"
-            result = self.config.sample_query
         else:
-            return {}
+            return []
 
-        # query the run result to get the full mapping
-        ena_data = self.get_request(
-            {
-                "result": result,
-                "query": query,
-                "fields": ["all"],
-            }
-        )
+        ena_data = self.get_request({
+            "result": self.config.run_query,
+            "query": query,
+            "fields": self.config.run_fields,
+        })
 
-        ena_metadata = ena_data[0]
-        samples = [ena_metadata.get("sample_accession"), ena_metadata.get("secondary_sample_accession")]
-        acc_dict = {
-            "ena_run": ena_metadata.get("run_accession"),
-            "ena_experiment": ena_metadata.get("experiment_accession"),
-            "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
-            "ena_sample": next(
-                (i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None
-            ),
-        }
-
-        return acc_dict
-
-    def fetch_run_metadata(self, run_acc: str) -> Dict[str, Any]:
-        ena_data =  self.get_request(
-            {
-                "result": self.config.run_query,
-                "query": f"run_accession={run_acc}",
-            }
-        )
-        run_data = {}
-        for field in self.config.run_fields:
-            run_data[field] = ena_data[0].get(field)
-        return run_data
+        results = []
+        for record in ena_data:
+            samples = [record.get("sample_accession"), record.get("secondary_sample_accession")]
+            results.append({
+                "run_accession": record.get("run_accession"),
+                "experiment_accession": record.get("experiment_accession"),
+                "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
+                "ena_sample": next((i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None),
+                "read_count": record.get("read_count"),
+                "first_created": record.get("first_created"),
+                "last_updated": record.get("last_updated"),
+                "fastq_ftp": record.get("fastq_ftp"),
+                "library_source": record.get("library_source"),
+                "library_strategy": record.get("library_strategy"),
+                "instrument_model": record.get("instrument_model"),
+                "instrument_platform": record.get("instrument_platform"),
+            })
+        return results
 
     def get_all_genome_accessions(self, acc: str) -> Dict[str, Any]:
         acc_type = get_accession_type(acc)
