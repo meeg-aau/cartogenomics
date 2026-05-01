@@ -19,8 +19,8 @@ class ENAConfig(BaseModel):
     retry_count: int = 3
     timeout: int = 30
     portal_api_output: dict = {"format": "json", "fields": ["all"]}
-    run_fields: list = ["read_count","last_updated","fastq_ftp","library_source","library_strategy","instrument_model", "instrument_platform"]
-    genome_fields: list = ["assembly_accession"]
+    run_fields: list = ["read_count", "first_created", "last_updated", "fastq_ftp", "library_source", "library_strategy", "instrument_model", "instrument_platform"]
+    genome_fields: list = ["assembly_accession", "sample_accession", "secondary_sample_accession", "first_created", "last_updated"]
 
     # analysis_api: str = "analysis"  # TBC
 

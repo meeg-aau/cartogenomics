@@ -1,3 +1,5 @@
+import logging
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
@@ -10,6 +12,7 @@ from api_fetch.biosamples import get_basic_sample_data
 from api_fetch.ena import ENAClient
 from sample_metadata_curation.curate import curate_biosample
 
+logger = logging.getLogger(__name__)
 ena_api = ENAClient()
 
 class Command(BaseCommand):
@@ -66,6 +69,9 @@ class Command(BaseCommand):
             genome_acc = accs.get("genome_accession")
             biosample_acc = accs.get("biosample")
             ena_sample_acc = accs.get("ena_sample")
+            # ENA date fields returned alongside accessions
+            ena_first_created_raw = accs.get("first_created")
+            ena_last_updated_raw = accs.get("last_updated")
         except Exception as e:
             raise CommandError(f"Failed to get genome accessions for {accession}: {e}")
 
@@ -98,6 +104,9 @@ class Command(BaseCommand):
         # Set up IngestVersion
         release, _ = CartogenomicsRelease.objects.get_or_create(label=release_label)
 
+        # BioSamples date fields:
+        #   "update"    → when BioSamples last modified the record
+        #   "submitted" → when the record was first submitted to BioSamples
         upstream_last_modified = None
         raw_update = raw.get("update")
         if raw_update:
@@ -106,30 +115,81 @@ class Command(BaseCommand):
             except ValueError:
                 pass
 
+        biosample_first_created = None
+        raw_submitted = raw.get("submitted")
+        if raw_submitted:
+            try:
+                biosample_first_created = timezone.datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        # ENA date fields from get_all_genome_accessions:
+        #   "first_created" → when the assembly record first appeared in ENA
+        #   "last_updated"  → when ENA last updated the assembly record
+        ena_first_created = None
+        if ena_first_created_raw:
+            try:
+                ena_first_created = timezone.datetime.fromisoformat(ena_first_created_raw.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        ena_last_updated = None
+        if ena_last_updated_raw:
+            try:
+                ena_last_updated = timezone.datetime.fromisoformat(ena_last_updated_raw.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
         ingest, _ = IngestVersion.objects.update_or_create(
-            source_system=source_system,
+            source_system=IngestVersion.SourceSystem.ENA,
             label=version_label,
             data_type=IngestVersion.DataType.GENOMES,
             defaults={
                 "pipeline_version": pipeline_version,
                 "release": release,
-                "retrieved_at": timezone.now(),
-                "upstream_last_modified": upstream_last_modified,
+                "last_modified_internal": upstream_last_modified,
             }
         )
 
-        # Update or create Genome
+        # Detect changes on re-ingest and record previous ingest
+        curated_defaults = {
+            "completeness": completeness,
+            "contamination": contamination,
+            "completeness_software": software or "",
+        }
+
+        previous_ingest = None
+        try:
+            existing = Genome.objects.get(accession=genome_acc)
+            changed_fields = [
+                field for field, value in curated_defaults.items()
+                if getattr(existing, field) != value
+            ]
+            if changed_fields:
+                logger.info(
+                    f"Genome {genome_acc} already exists (id={existing.pk}) — "
+                    f"{len(changed_fields)} field(s) changed: {changed_fields}. "
+                    f"Updating and recording previous IngestVersion id={existing.ingest_id}."
+                )
+                previous_ingest = existing.ingest
+            else:
+                logger.info(
+                    f"Genome {genome_acc} already exists (id={existing.pk}) — no fields changed. "
+                    "Updating ingest pointer only."
+                )
+        except Genome.DoesNotExist:
+            logger.info(f"Genome {genome_acc} not found in DB — will be created.")
+
+        defaults = {**curated_defaults, "ingest": ingest}
+        if previous_ingest is not None:
+            defaults["previous_ingest"] = previous_ingest
+
         genome, created = Genome.objects.update_or_create(
             accession=genome_acc,
-            ingest=ingest,
-            defaults={
-                "completeness": completeness,
-                "contamination": contamination,
-                "completeness_software": software or "",
-            },
+            defaults=defaults,
         )
 
-        # link to genome in ENA
+        # Link to genome assembly page in ENA (dates from ENA API)
         ExternalResource.objects.update_or_create(
             source_system=ExternalResource.SourceSystem.ENA,
             accession=genome_acc,
@@ -139,32 +199,25 @@ class Command(BaseCommand):
                 "genome": genome,
                 "sample": None,
                 "run": None,
+                "first_created_external": ena_first_created,
+                "last_modified_external": ena_last_updated,
             },
         )
 
-        # Link to the Sample in BioSamples
-        if biosample_acc:
+        # Link to the BioSamples record for this genome (dates from BioSamples API)
+        sample_acc_for_url = biosample_acc or ena_sample_acc
+        if sample_acc_for_url:
             ExternalResource.objects.update_or_create(
-                source_system=ExternalResource.SourceSystem.BIOSAMPLES,
+                source_system=ExternalResource.SourceSystem.BIOSAMPLES if biosample_acc else ExternalResource.SourceSystem.ENA,
                 accession=genome_acc,
                 ingest=ingest,
                 defaults={
-                    "url": f"https://www.ebi.ac.uk/biosamples/samples/{biosample_acc}.json",
+                    "url": f"https://www.ebi.ac.uk/biosamples/samples/{sample_acc_for_url}.json",
                     "genome": genome,
                     "run": None,
                     "sample": None,
-                },
-            )
-        else:
-            ExternalResource.objects.update_or_create(
-                source_system=ExternalResource.SourceSystem.ENA,
-                accession=genome_acc,
-                ingest=ingest,
-                defaults={
-                    "url": f"https://www.ebi.ac.uk/biosamples/samples/{ena_sample_acc}.json",
-                    "genome": genome,
-                    "run": None,
-                    "sample": None,
+                    "first_created_external": biosample_first_created,
+                    "last_modified_external": upstream_last_modified,
                 },
             )
 

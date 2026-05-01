@@ -8,7 +8,7 @@ class Run(models.Model):
     Represents a sequencing run (e.g. ENA/SRA run accession).
     """
 
-    accession = models.CharField(max_length=100)
+    accession = models.CharField(max_length=100, unique=True)
 
     sample = models.ForeignKey(
         Sample,
@@ -22,19 +22,20 @@ class Run(models.Model):
         related_name="runs",
     )
 
-    read_count = models.BigIntegerField(null=True, blank=True)
-
-    sequencer = models.CharField(
-        max_length=255,
+    previous_ingest = models.ForeignKey(
+        IngestVersion,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        help_text="Sequencing platform, e.g. Illumina NovaSeq 6000",
+        related_name="previous_for_runs",
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    read_count = models.BigIntegerField(null=True, blank=True)
+    sequencer = models.CharField(max_length=255, null=True, blank=True)
+    library_source = models.CharField(max_length=100, null=True, blank=True)
+    library_strategy = models.CharField(max_length=100, null=True, blank=True)
 
-    class Meta:
-        unique_together = ("accession", "ingest")
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.accession

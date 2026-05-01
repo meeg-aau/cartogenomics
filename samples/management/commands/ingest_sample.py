@@ -1,4 +1,6 @@
-from django.utils import timezone
+import logging
+
+from datetime import datetime
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
@@ -10,6 +12,7 @@ from api_fetch.biosamples import get_basic_sample_data, BASE_URL
 from api_fetch.ena import ENAClient
 from sample_metadata_curation.curate import curate_biosample
 
+logger = logging.getLogger(__name__)
 ena_api = ENAClient()
 
 
@@ -30,14 +33,6 @@ class Command(BaseCommand):
             type=str,
             required=True,
             help='Source dataset label, e.g. "MFD"',
-        )
-        parser.add_argument(
-            "--sample-type",
-            "-t",
-            type=str,
-            default="run",
-            choices=["run", "genome"],
-            help="Type of sample: run or genome",
         )
         parser.add_argument(
             "--version-label",
@@ -66,9 +61,10 @@ class Command(BaseCommand):
         accession = opts["accession"]
         source_dataset = opts["source"]
         version_label = opts["version_label"]
-        sample_type = opts["sample_type"]
         pipeline_version = opts["pipeline_version"]
         release_label = opts["release_label"]
+
+        logger.info(f"Starting ingest for accession: {accession}")
 
         # Get related accessions from ENA
         try:
@@ -78,14 +74,16 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to get accessions for {accession}: {e}")
 
-        # Fetch raw BioSample JSON using biosample_acc if available,
-        # otherwise fall back to ena_sample_acc
+        logger.debug(f"Resolved accessions: biosample={biosample_acc} ena_sample={ena_sample_acc}")
+
+        # Fetch raw BioSample JSON using biosample_acc if available, otherwise fall back to ena_sample_acc
         fetch_acc = biosample_acc or ena_sample_acc
         if not fetch_acc:
             raise CommandError(
                 f"Could not find a valid sample accession for {accession}"
             )
 
+        logger.info(f"Fetching BioSample metadata for {fetch_acc}")
         try:
             raw = get_basic_sample_data(fetch_acc)
         except Exception as e:
@@ -96,31 +94,41 @@ class Command(BaseCommand):
 
         # Set up IngestVersion
         release, _ = CartogenomicsRelease.objects.get_or_create(label=release_label)
-        
-        # Upstream last modified from BioSample JSON 'update' field
-        # Format: "2025-01-22T13:55:00.113Z"
+
+        # BioSamples date fields:
+        #   "update" → when the record was last modified
+        #   "submitted" → when the record was first submitted to BioSamples
         upstream_last_modified = None
         raw_update = raw.get("update")
         if raw_update:
             try:
-                upstream_last_modified = timezone.datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
+                upstream_last_modified = datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
             except ValueError:
-                pass
+                logger.warning(f"Could not parse BioSamples 'update' date: {raw_update}")
 
-        version, _ = IngestVersion.objects.update_or_create(
+        biosample_first_created = None
+        raw_submitted = raw.get("submitted")
+        if raw_submitted:
+            try:
+                biosample_first_created = datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
+            except ValueError:
+                logger.warning(f"Could not parse BioSamples 'submitted' date: {raw_submitted}")
+
+        version, version_created = IngestVersion.objects.update_or_create(
             source_system=IngestVersion.SourceSystem.BIOSAMPLES,
             label=version_label,
             data_type=IngestVersion.DataType.SAMPLE_METADATA,
             defaults={
                 "pipeline_version": pipeline_version,
                 "release": release,
-                "retrieved_at": timezone.now(),
-                "upstream_last_modified": upstream_last_modified,
-                "upstream_version": "",
+                "last_modified_internal": upstream_last_modified,
+                "upstream_version": None,
             }
         )
+        logger.debug(f"IngestVersion id={version.pk} label={version.label}", "Created" if version_created else "Using existing")
 
         # Curate sample fields
+        logger.info(f"Curating metadata for {fetch_acc}")
         try:
             curated = curate_biosample(
                 raw,
@@ -146,11 +154,10 @@ class Command(BaseCommand):
                 f"Could not determine a lookup key for Sample from {accession}"
             )
 
-        defaults = {
+        curated_defaults = {
             "biosample": biosample_acc,
             "ena_sample": ena_sample_acc,
             "source_dataset": source_dataset,
-            "ingest": version,
             "latitude": curated.get("latitude"),
             "longitude": curated.get("longitude"),
             "region": curated.get("region"),
@@ -161,15 +168,31 @@ class Command(BaseCommand):
             "raw_metadata": curated,
         }
 
-        if sample_type == "genome":
-            defaults.update(
-                {
-                    "completeness_score": curated.get("completeness_score"),
-                    "contamination_score": curated.get("contamination_score"),
-                    "completeness_software": curated.get("completeness_software"),
-                }
-            )
+        # Detect whether any curated field changed on re-ingest
+        previous_ingest = None
+        try:
+            existing = Sample.objects.get(**lookup)
+            changed_fields = [
+                field for field, value in curated_defaults.items()
+                if getattr(existing, field) != value
+            ]
+            if changed_fields:
+                logger.info(
+                    f"Sample {fetch_acc} already exists (id={existing.pk}) — {len(changed_fields)} field(s) changed: {changed_fields}. "
+                    f"Updating in place and recording previous IngestVersion id={existing.ingest}."
+                )
+                previous_ingest = existing.ingest
+            else:
+                logger.info(
+                    f"Sample {fetch_acc} already exists (id={existing.pk}) and no curated fields have changed. "
+                    "Updating ingest pointer only — existing row preserved as is."
+                )
+        except Sample.DoesNotExist:
+            logger.info(f"Sample {fetch_acc} not found in DB — will be created.")
 
+        defaults = {**curated_defaults, "ingest": version}
+        if previous_ingest is not None:
+            defaults["previous_ingest"] = previous_ingest
 
         try:
             sample, created = Sample.objects.update_or_create(
@@ -179,7 +202,10 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to create/update Sample for {accession}: {e}")
 
+        logger.info(f"Sample id={sample.pk} ({sample})", "Created" if created else "Updated")
+
         # Populate ExternalResource for BioSamples
+        logger.debug(f"ExternalResource for {sample.biosample}")
         try:
             ExternalResource.objects.update_or_create(
                 source_system=ExternalResource.SourceSystem.BIOSAMPLES,
@@ -190,11 +216,14 @@ class Command(BaseCommand):
                     "sample": sample,
                     "run": None,
                     "genome": None,
+                    "first_created_external": biosample_first_created,
+                    "last_modified_external": upstream_last_modified,
                 },
             )
         except Exception as e:
             raise CommandError(f"Failed to create/update ExternalResource for {accession}: {e}")
 
+        logger.info(f"Ingest complete for {fetch_acc}")
         self.stdout.write(
             self.style.SUCCESS(
                 f"{'Created' if created else 'Updated'} Sample {sample}"

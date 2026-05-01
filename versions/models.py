@@ -39,7 +39,7 @@ class IngestVersion(models.Model):
         related_name="ingests",
     )
 
-    retrieved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True, default="")
 
     class Meta:

@@ -1,4 +1,3 @@
-from importlib.metadata import metadata
 from typing import List, Dict, Optional, Any
 
 import requests
@@ -75,34 +74,6 @@ class ENAClient:
 
         return acc_dict
 
-    def get_all_genome_accessions(self, acc: str) -> Dict[str, Any]:
-        acc_type = get_accession_type(acc)
-        if acc_type == "sample" or acc_type == "biosample":
-            ena_data = self.get_request(
-                {
-                    "result": self.config.genome_query,
-                    "query": f"sample_accession={acc} OR secondary_sample_accession={acc}",
-                }
-            )
-            genome_acc = ena_data[0].get("assembly_accession")
-            samples = [ena_data[0].get("sample_accession"), ena_data[0].get("secondary_sample_accession")]
-        elif acc_type == "genome":
-            ena_data = self.get_request(
-                {
-                    "result": self.config.genome_query,
-                    "query": f"assembly_accession={acc}",
-                }
-            )
-            samples = [ena_data[0].get("sample_accession"), ena_data[0].get("secondary_sample_accession")]
-            genome_acc = acc
-        return {
-            "genome_accession": genome_acc,
-            "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
-            "ena_sample": next(
-                (i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None
-            )
-        }
-
     def fetch_run_metadata(self, run_acc: str) -> Dict[str, Any]:
         ena_data =  self.get_request(
             {
@@ -114,3 +85,37 @@ class ENAClient:
         for field in self.config.run_fields:
             run_data[field] = ena_data[0].get(field)
         return run_data
+
+    def get_all_genome_accessions(self, acc: str) -> Dict[str, Any]:
+        acc_type = get_accession_type(acc)
+        fields = self.config.genome_fields
+
+        if acc_type == "sample" or acc_type == "biosample":
+            query = f"sample_accession={acc} OR secondary_sample_accession={acc}"
+        elif acc_type == "genome":
+            query = f"assembly_accession={acc}"
+        else:
+            return {}
+
+        ena_data = self.get_request(
+            {
+                "result": self.config.genome_query,
+                "query": query,
+                "fields": fields,
+            }
+        )
+
+        if not ena_data:
+            return {}
+
+        record = ena_data[0]
+        samples = [record.get("sample_accession"), record.get("secondary_sample_accession")]
+        return {
+            "genome_accession": record.get("assembly_accession") if acc_type != "genome" else acc,
+            "biosample": next((i for i in samples if i and i.startswith("SAM")), None),
+            "ena_sample": next((i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None),
+            "first_created": record.get("first_created"),
+            "last_updated": record.get("last_updated"),
+        }
+
+

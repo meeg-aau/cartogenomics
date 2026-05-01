@@ -1,18 +1,22 @@
+import logging
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
-from samples.models import Sample
 from runs.models import Run
-from versions.models import IngestVersion
+from samples.models import Sample
+from versions.models import IngestVersion, CartogenomicsRelease
 from external.models import ExternalResource
 
 from api_fetch.ena import ENAClient
 
+logger = logging.getLogger(__name__)
 ena_api = ENAClient()
 
 
 class Command(BaseCommand):
-    help = "Fetch ENA runs and store them in the Run table."
+    help = "Fetch ENA run metadata and store it in the Run table."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -20,126 +24,173 @@ class Command(BaseCommand):
             "-a",
             type=str,
             required=True,
-            help="Accession, e.g. SAME..., ERR..., ERX..., ERS...",
-        )
-        parser.add_argument(
-            "--source",
-            "-s",
-            type=str,
-            required=True,
-            help='Source dataset label, e.g. "MFD"',
-        )
-        parser.add_argument(
-            "--sample-type",
-            "-t",
-            type=str,
-            default="run",
-            choices=["run", "genome"],
-            help="Type of sample: run or genome",
+            help="Any ENA accession: run (ERR), experiment (ERX), or sample (ERS/SAME)",
         )
         parser.add_argument(
             "--version-label",
             "-vl",
             type=str,
             required=True,
-            help='Version label, e.g. "mfd_2026_01_15"',
+            help='Version label, e.g. "mfd_2026_01_16"',
         )
         parser.add_argument(
             "--pipeline-version",
             "-pv",
             type=str,
-            default="sample_metadata_curation 0.1.0",
-            help='Pipeline version, e.g. "sample_metadata_curation 0.1.0"',
+            default="",
+            help="Pipeline version string",
         )
         parser.add_argument(
             "--release-label",
             "-rl",
             type=str,
             default="1.0",
-            help='Cartogenomics release label, default is "1.0"',
+            help='Cartogenomics release label, default "1.0"',
         )
-
 
     @transaction.atomic
     def handle(self, *args, **opts):
         accession = opts["accession"]
-        source_dataset = opts["source"]
         version_label = opts["version_label"]
-        sample_type = opts["sample_type"]
         pipeline_version = opts["pipeline_version"]
         release_label = opts["release_label"]
 
-        # Get related accessions from ENA
+        # Resolve all related accessions from ENA
         try:
             accs = ena_api.get_all_run_accessions(accession)
+            run_acc = accs.get("ena_run")
             biosample_acc = accs.get("biosample")
             ena_sample_acc = accs.get("ena_sample")
         except Exception as e:
-            raise CommandError(f"Failed to get accessions for {accession}: {e}")
+            raise CommandError(f"Failed to resolve accessions for {accession}: {e}")
 
+        if not run_acc:
+            raise CommandError(f"Could not resolve a run accession from {accession}")
 
+        # Sample must already exist — ingest_sample should be run first
+        lookup = {}
+        if biosample_acc:
+            lookup["biosample"] = biosample_acc
+        elif ena_sample_acc:
+            lookup["ena_sample"] = ena_sample_acc
+        else:
+            raise CommandError(f"No sample accession found for {accession}")
 
-    @transaction.atomic
-    def handle(self, *args, **opts):
-        biosample = opts["biosample"]
-        ingest_label = opts["ingest_label"]
-
-        # 1) Find sample row
         try:
-            sample = Sample.objects.get(biosample_accession=biosample)
+            sample = Sample.objects.get(**lookup)
         except Sample.DoesNotExist:
-            raise CommandError(f"Sample not found for biosample_accession={biosample}. Ingest sample first.")
+            raise CommandError(
+                f"Sample not found for {lookup}. Run ingest_sample first."
+            )
 
-        # 2) Ensure ingest version exists
-        ingest, _ = IngestVersion.objects.get_or_create(
-            source_system="ENA",
-            data_type="READS",
-            label=ingest_label,
-            defaults={"notes": "ENA runs ingested from portal API"},
+        # Fetch run metadata from ENA
+        try:
+            run_data = ena_api.fetch_run_metadata(run_acc)
+        except Exception as e:
+            raise CommandError(f"Failed to fetch run metadata for {run_acc}: {e}")
+
+        # Parse ENA date fields
+        def parse_date(raw):
+            if not raw:
+                return None
+            try:
+                return timezone.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+
+        ena_first_created = parse_date(run_data.get("first_created"))
+        ena_last_updated = parse_date(run_data.get("last_updated"))
+
+        # Set up IngestVersion
+        release, _ = CartogenomicsRelease.objects.get_or_create(label=release_label)
+        ingest, _ = IngestVersion.objects.update_or_create(
+            source_system=IngestVersion.SourceSystem.ENA,
+            data_type=IngestVersion.DataType.READS,
+            label=version_label,
+            defaults={
+                "pipeline_version": pipeline_version,
+                "release": release,
+            },
         )
 
-        # 3) Fetch runs from ENA portal
-        run_data = get_run_from_sample(biosample)
-        if not run_data:
-            self.stdout.write(self.style.WARNING(f"No runs returned for {biosample}"))
-            return
+        # Build the curated field dict
+        curated_defaults = {
+            "sample": sample,
+            "read_count": run_data.get("read_count"),
+            "sequencer": run_data.get("instrument_model") or run_data.get("instrument_platform"),
+            "library_source": run_data.get("library_source"),
+            "library_strategy": run_data.get("library_strategy"),
+        }
 
-        created_count = 0
-        updated_count = 0
+        # Detect changes on re-ingest and record previous ingest
+        previous_ingest = None
+        try:
+            existing = Run.objects.get(accession=run_acc)
+            changed_fields = [
+                field for field, value in curated_defaults.items()
+                if getattr(existing, field) != value
+            ]
+            if changed_fields:
+                logger.info(
+                    f"Run {run_acc} already exists (id={existing.pk}) — "
+                    f"{len(changed_fields)} field(s) changed: {changed_fields}. "
+                    f"Updating and recording previous IngestVersion id={existing.ingest_id}."
+                )
+                previous_ingest = existing.ingest
+            else:
+                logger.info(
+                    f"Run {run_acc} already exists (id={existing.pk}) — no fields changed. "
+                    "Updating ingest pointer only."
+                )
+        except Run.DoesNotExist:
+            logger.info(f"Run {run_acc} not found in DB — will be created.")
 
-        # run_data in your code is JSON list of dicts
-        for r in run_data:
-            run_acc = r.get("run_accession")
-            if not run_acc:
+        defaults = {**curated_defaults, "ingest": ingest}
+        if previous_ingest is not None:
+            defaults["previous_ingest"] = previous_ingest
+
+        run, created = Run.objects.update_or_create(
+            accession=run_acc,
+            defaults=defaults,
+        )
+
+        # ExternalResource — ENA browser link
+        ExternalResource.objects.update_or_create(
+            source_system=ExternalResource.SourceSystem.ENA,
+            accession=run_acc,
+            ingest=ingest,
+            defaults={
+                "url": f"https://www.ebi.ac.uk/ena/browser/view/{run_acc}",
+                "run": run,
+                "sample": None,
+                "genome": None,
+                "first_created_external": ena_first_created,
+                "last_modified_external": ena_last_updated,
+            },
+        )
+
+        # ExternalResource — one row per FASTQ file
+        fastq_ftp = run_data.get("fastq_ftp") or ""
+        for ftp_path in fastq_ftp.split(";"):
+            ftp_path = ftp_path.strip()
+            if not ftp_path:
                 continue
-
-            read_count = r.get("read_count") or r.get("reads") or None
-            sequencer = r.get("instrument_platform") or r.get("instrument_model") or None
-
-            obj, created = Run.objects.update_or_create(
-                accession=run_acc,
-                ingest=ingest,
-                defaults={
-                    "sample": sample,
-                    "read_count": read_count,
-                    "sequencer": sequencer,
-                },
-            )
-            created_count += int(created)
-            updated_count += int(not created)
-
-            # 4) Optional: store external link
+            url = f"https://{ftp_path}" if not ftp_path.startswith("http") else ftp_path
+            filename = ftp_path.split("/")[-1]
             ExternalResource.objects.update_or_create(
-                source_system="ENA",
-                resource_type="ENA_RUN",
+                source_system=ExternalResource.SourceSystem.ENA,
+                accession=filename,
                 ingest=ingest,
-                run=obj,
                 defaults={
-                    "uri": f"https://www.ebi.ac.uk/ena/browser/view/{run_acc}",
-                    "external_id": run_acc,
+                    "url": url,
+                    "run": run,
+                    "sample": None,
+                    "genome": None,
+                    "first_created_external": ena_first_created,
+                    "last_modified_external": ena_last_updated,
                 },
             )
 
         self.stdout.write(self.style.SUCCESS(
-            f"Runs ingested for {biosample}: created={created_count} updated={updated_count}"
+            f"{'Created' if created else 'Updated'} Run {run_acc} linked to Sample {sample}"
         ))

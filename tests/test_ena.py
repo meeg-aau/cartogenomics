@@ -1,126 +1,177 @@
 import unittest
-from unittest.mock import patch
-import api_fetch.ena as ena
 import logging
 import sys
+from unittest.mock import patch
+
+from api_fetch.ena import ENAClient, get_accession_type
 
 logging.basicConfig(level=logging.INFO, force=True, stream=sys.stdout)
 
 
-class TestENA(unittest.TestCase):
-    biosample_acc = "SAMN39868869"
-    sample_acc = "SRS20505516"
+MOCK_RUN_RECORD = {
+    "run_accession": "ERR123456",
+    "experiment_accession": "ERX123456",
+    "sample_accession": "SAMEA654321",
+    "secondary_sample_accession": "ERS654321",
+}
 
-    biosample_acc_multiple = "SAMEA114263416"
-    sample_acc_multiple = "ERS16252355"
+MOCK_GENOME_RECORD = {
+    "assembly_accession": "GCA_031587420.1",
+    "sample_accession": "SAMEA112438701",
+    "secondary_sample_accession": "ERS13041822",
+    "first_created": "2023-11-01",
+    "last_updated": "2024-02-10",
+}
 
-    run_accession = "SRR28022638"
-    experiment_accession = "SRX23674624"
 
-    expected_data = [
-        {
-            "ena_sample": "SRS20505516",
-            "biosample": "SAMN39868869",
-            "ena_run": "SRR28022638",
-            "ena_experiment": "SRX23674624",
-        }
-    ]
+class TestGetAccessionType(unittest.TestCase):
 
-    def test_get_accessions_by_biosample(self):
-        logging.info(
-            f"\nTesting get_accessions_by_sample with biosample {self.biosample_acc}"
-        )
-        data = ena.get_run_from_sample(self.biosample_acc)
-        accessions = ena.get_accessions(data)
-        assert accessions == self.expected_data
+    def test_run(self):
+        logging.info("\nTesting accession type: run")
+        assert get_accession_type("ERR123456") == "run"
 
-    def test_get_accessions_by_ena_sample(self):
-        logging.info(
-            f"\nTesting get_accessions_by_sample with ena sample {self.sample_acc}"
-        )
-        data = ena.get_run_from_sample(self.sample_acc)
-        accessions = ena.get_accessions(data)
-        assert accessions == self.expected_data
+    def test_experiment(self):
+        logging.info("\nTesting accession type: experiment")
+        assert get_accession_type("ERX123456") == "experiment"
 
-    def test_get_multiple_runs_for_one_biosample(self):
-        logging.info(
-            f"\n Testing get accessions for biosample with multiple experiments and runs {self.biosample_acc_multiple}"
-        )
-        data = ena.get_run_from_sample(self.biosample_acc_multiple)
-        accessions = ena.get_accessions(data)
-        assert len(accessions) == 4
+    def test_ena_sample(self):
+        logging.info("\nTesting accession type: ena sample")
+        assert get_accession_type("ERS123456") == "sample"
 
-    def test_get_multiple_runs_for_one_ena_sample(self):
-        logging.info(
-            f"\n Testing get accessions for ena_sample with multiple experiments and runs {self.sample_acc_multiple}"
-        )
-        data = ena.get_run_from_sample(self.sample_acc_multiple)
-        accessions = ena.get_accessions(data)
-        assert len(accessions) == 4
+    def test_biosample(self):
+        logging.info("\nTesting accession type: biosample")
+        assert get_accession_type("SAMEA123456") == "biosample"
 
-    def test_get_sample_from_experiment(self):
-        logging.info(f"\n Testing get sample from experiment {self.sample_acc}")
-        sample_dict = ena.experiment_to_sample(self.experiment_accession)
-        assert sample_dict == {"biosample": self.biosample_acc, "ena_sample": self.sample_acc}
+    def test_genome(self):
+        logging.info("\nTesting accession type: genome")
+        assert get_accession_type("GCA_123456.1") == "genome"
 
-    def test_get_sample_from_run(self):
-        logging.info(f"\n Testing get sample from run {self.sample_acc}")
-        sample_dict = ena.run_to_sample(self.run_accession)
-        assert sample_dict == {"biosample": self.biosample_acc, "ena_sample": self.sample_acc}
+    def test_unknown(self):
+        logging.info("\nTesting accession type: unknown")
+        assert get_accession_type("UNKNOWN123") is None
 
-    def test_client_get_all_accessions_from_run(self):
-        logging.info(f"\n Testing ENAClient.get_all_accessions from run {self.run_accession}")
-        client = ena.ENAClient()
-        accessions = client.get_all_accessions(self.run_accession)
-        assert accessions == self.expected_data
 
-    def test_client_fetch_metadata(self):
-        logging.info(f"\n Testing ENAClient.fetch metadata methods")
-        client = ena.ENAClient()
-        # Just check they can be called and return something (mocked in tests maybe, but here it's real calls)
-        # In a real test we would mock the response.
-        run_meta = client.fetch_run_metadata(self.run_accession)
-        assert len(run_meta) > 0
-        exp_meta = client.fetch_experiment_metadata(self.experiment_accession)
-        assert len(exp_meta) > 0
-        sample_meta = client.fetch_sample_metadata(self.sample_acc)
-        assert len(sample_meta) > 0
+class TestGetAllRunAccessions(unittest.TestCase):
+    client = ENAClient()
 
     @patch("api_fetch.ena.ENAClient.get_request")
-    def test_run_to_sample_fallback(self, mock_get_request):
-        # Case: BioSample accession is in secondary_sample_accession
-        mock_get_request.return_value = [
-            {"sample_accession": "SRS12345", "secondary_sample_accession": "SAMN12345"}
-        ]
-        sample_dict = ena.run_to_sample("ERR12345")
-        assert sample_dict == {"biosample": "SAMN12345", "ena_sample": "SRS12345"}
+    def test_from_run_accession(self, mock_get):
+        logging.info("\nTesting get_all_run_accessions from run accession")
+        mock_get.return_value = [MOCK_RUN_RECORD]
+        result = self.client.get_all_run_accessions("ERR123456")
+        assert result["ena_run"] == "ERR123456"
+        assert result["ena_experiment"] == "ERX123456"
+        assert result["biosample"] == "SAMEA654321"
+        assert result["ena_sample"] == "ERS654321"
 
     @patch("api_fetch.ena.ENAClient.get_request")
-    def test_run_to_sample_no_biosample(self, mock_get_request):
-        # Case: No BioSample accession in either field
-        mock_get_request.return_value = [
-            {"sample_accession": "", "secondary_sample_accession": "ERS12345"}
-        ]
-        sample_dict = ena.run_to_sample("ERR12345")
-        assert sample_dict == {"biosample": None, "ena_sample": "ERS12345"}
+    def test_from_biosample_accession(self, mock_get):
+        logging.info("\nTesting get_all_run_accessions from biosample accession")
+        mock_get.return_value = [MOCK_RUN_RECORD]
+        result = self.client.get_all_run_accessions("SAMEA654321")
+        assert result["biosample"] == "SAMEA654321"
+        assert result["ena_sample"] == "ERS654321"
 
     @patch("api_fetch.ena.ENAClient.get_request")
-    def test_experiment_to_sample_fallback(self, mock_get_request):
-        # Case: BioSample accession is in secondary_sample_accession for experiment
-        mock_get_request.return_value = [
-            {"sample_accession": "SRS12345", "secondary_sample_accession": "SAMN12345"}
-        ]
-        sample_dict = ena.experiment_to_sample("ERX12345")
-        assert sample_dict == {"biosample": "SAMN12345", "ena_sample": "SRS12345"}
+    def test_biosample_in_secondary_field(self, mock_get):
+        logging.info("\nTesting get_all_run_accessions with biosample in secondary_sample_accession")
+        mock_get.return_value = [{
+            "run_accession": "ERR123456",
+            "experiment_accession": "ERX123456",
+            "sample_accession": "ERS654321",
+            "secondary_sample_accession": "SAMEA654321",
+        }]
+        result = self.client.get_all_run_accessions("ERR123456")
+        assert result["biosample"] == "SAMEA654321"
+        assert result["ena_sample"] == "ERS654321"
+
+    def test_unknown_accession_returns_empty(self):
+        logging.info("\nTesting get_all_run_accessions with unknown accession")
+        result = self.client.get_all_run_accessions("UNKNOWN123")
+        assert result == {}
+
+
+class TestFetchRunMetadata(unittest.TestCase):
+    client = ENAClient()
 
     @patch("api_fetch.ena.ENAClient.get_request")
-    def test_experiment_to_sample_no_biosample(self, mock_get_request):
-        # Case: No BioSample accession in either field for experiment
-        mock_get_request.return_value = [
-            {"sample_accession": "", "secondary_sample_accession": "ERS12345"}
-        ]
-        sample_dict = ena.experiment_to_sample("ERX12345")
-        assert sample_dict == {"biosample": None, "ena_sample": "ERS12345"}
+    def test_returns_all_run_fields(self, mock_get):
+        logging.info("\nTesting fetch_run_metadata returns all expected fields")
+        mock_get.return_value = [{
+            "read_count": "42000000",
+            "first_created": "2024-01-15",
+            "last_updated": "2024-01-16",
+            "fastq_ftp": "ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456_1.fastq.gz",
+            "library_source": "METAGENOMIC",
+            "library_strategy": "WGS",
+            "instrument_model": "Illumina NovaSeq 6000",
+            "instrument_platform": "ILLUMINA",
+        }]
+        result = self.client.fetch_run_metadata("ERR123456")
+        assert result["read_count"] == "42000000"
+        assert result["library_source"] == "METAGENOMIC"
+        assert result["library_strategy"] == "WGS"
+        assert result["instrument_model"] == "Illumina NovaSeq 6000"
+        assert result["fastq_ftp"] == "ftp.sra.ebi.ac.uk/vol1/fastq/ERR123/ERR123456_1.fastq.gz"
+        assert result["first_created"] == "2024-01-15"
+        assert result["last_updated"] == "2024-01-16"
+
+    @patch("api_fetch.ena.ENAClient.get_request")
+    def test_missing_fields_return_none(self, mock_get):
+        logging.info("\nTesting fetch_run_metadata with missing fields returns None")
+        mock_get.return_value = [{"read_count": "1000"}]
+        result = self.client.fetch_run_metadata("ERR123456")
+        assert result["read_count"] == "1000"
+        assert result["instrument_model"] is None
+        assert result["fastq_ftp"] is None
+
+
+class TestGetAllGenomeAccessions(unittest.TestCase):
+    client = ENAClient()
+
+    @patch("api_fetch.ena.ENAClient.get_request")
+    def test_from_genome_accession(self, mock_get):
+        logging.info("\nTesting get_all_genome_accessions from genome accession")
+        mock_get.return_value = [MOCK_GENOME_RECORD]
+        result = self.client.get_all_genome_accessions("GCA_031587420.1")
+        assert result["genome_accession"] == "GCA_031587420.1"
+        assert result["biosample"] == "SAMEA112438701"
+        assert result["ena_sample"] == "ERS13041822"
+        assert result["first_created"] == "2023-11-01"
+        assert result["last_updated"] == "2024-02-10"
+
+    @patch("api_fetch.ena.ENAClient.get_request")
+    def test_from_biosample_accession(self, mock_get):
+        logging.info("\nTesting get_all_genome_accessions from biosample accession")
+        mock_get.return_value = [MOCK_GENOME_RECORD]
+        result = self.client.get_all_genome_accessions("SAMEA112438701")
+        assert result["genome_accession"] == "GCA_031587420.1"
+        assert result["biosample"] == "SAMEA112438701"
+        assert result["first_created"] == "2023-11-01"
+
+    @patch("api_fetch.ena.ENAClient.get_request")
+    def test_genome_fields_are_requested(self, mock_get):
+        logging.info("\nTesting get_all_genome_accessions requests explicit fields")
+        mock_get.return_value = [MOCK_GENOME_RECORD]
+        self.client.get_all_genome_accessions("GCA_031587420.1")
+        call_kwargs = mock_get.call_args[0][0]
+        assert "fields" in call_kwargs
+        assert "first_created" in call_kwargs["fields"]
+        assert "last_updated" in call_kwargs["fields"]
+        assert "assembly_accession" in call_kwargs["fields"]
+
+    @patch("api_fetch.ena.ENAClient.get_request")
+    def test_empty_response_returns_empty(self, mock_get):
+        logging.info("\nTesting get_all_genome_accessions with empty response")
+        mock_get.return_value = []
+        result = self.client.get_all_genome_accessions("GCA_031587420.1")
+        assert result == {}
+
+    def test_unknown_accession_returns_empty(self):
+        logging.info("\nTesting get_all_genome_accessions with unknown accession")
+        result = self.client.get_all_genome_accessions("UNKNOWN123")
+        assert result == {}
+
 
 if __name__ == "__main__":
     unittest.main()

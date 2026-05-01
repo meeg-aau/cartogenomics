@@ -43,7 +43,21 @@ class Sample(models.Model):
     source_dataset = models.CharField(max_length=50, default="", choices=SourceDataset.choices)
 
     # link to ingest version
-    ingest = models.ForeignKey(IngestVersion, on_delete=models.PROTECT, null=True, blank=True)
+    ingest = models.ForeignKey(
+        IngestVersion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="samples",
+    )
+    # set to the previous ingest when any curated field changes on re-ingest
+    previous_ingest = models.ForeignKey(
+        IngestVersion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="previous_for_samples",
+    )
 
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)

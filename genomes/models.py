@@ -12,12 +12,20 @@ class Genome(models.Model):
         CHECKM2 = "checkm2", "CheckM2"
         BUSCO = "busco", "BUSCO"
 
-    accession = models.CharField(max_length=100)
+    accession = models.CharField(max_length=100, unique=True)
 
     ingest = models.ForeignKey(
         IngestVersion,
         on_delete=models.PROTECT,
         related_name="genomes",
+    )
+
+    previous_ingest = models.ForeignKey(
+        IngestVersion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="previous_for_genomes",
     )
 
     # Quality metrics
@@ -32,7 +40,7 @@ class Genome(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("accession", "ingest")
+        pass
 
     def __str__(self):
         return self.accession
