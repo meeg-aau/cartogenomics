@@ -95,8 +95,9 @@ class Command(BaseCommand):
             if not raw:
                 return None
             try:
-                return timezone.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            except ValueError:
+                dt = timezone.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 return None
 
         ena_first_created = parse_date(run_data.get("first_created"))

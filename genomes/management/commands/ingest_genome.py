@@ -111,16 +111,18 @@ class Command(BaseCommand):
         raw_update = raw.get("update")
         if raw_update:
             try:
-                upstream_last_modified = timezone.datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
-            except ValueError:
+                dt = timezone.datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
+                upstream_last_modified = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 pass
 
         biosample_first_created = None
         raw_submitted = raw.get("submitted")
         if raw_submitted:
             try:
-                biosample_first_created = timezone.datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
-            except ValueError:
+                dt = timezone.datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
+                biosample_first_created = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 pass
 
         # ENA date fields from get_all_genome_accessions:
@@ -129,15 +131,17 @@ class Command(BaseCommand):
         ena_first_created = None
         if ena_first_created_raw:
             try:
-                ena_first_created = timezone.datetime.fromisoformat(ena_first_created_raw.replace("Z", "+00:00"))
-            except ValueError:
+                dt = timezone.datetime.fromisoformat(ena_first_created_raw.replace("Z", "+00:00"))
+                ena_first_created = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 pass
 
         ena_last_updated = None
         if ena_last_updated_raw:
             try:
-                ena_last_updated = timezone.datetime.fromisoformat(ena_last_updated_raw.replace("Z", "+00:00"))
-            except ValueError:
+                dt = timezone.datetime.fromisoformat(ena_last_updated_raw.replace("Z", "+00:00"))
+                ena_last_updated = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 pass
 
         ingest, _ = IngestVersion.objects.update_or_create(

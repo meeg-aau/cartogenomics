@@ -110,16 +110,18 @@ class Command(BaseCommand):
         raw_update = raw.get("update")
         if raw_update:
             try:
-                upstream_last_modified = datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
-            except ValueError:
+                dt = datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
+                upstream_last_modified = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 logger.warning(f"Could not parse BioSamples 'update' date: {raw_update}")
 
         biosample_first_created = None
         raw_submitted = raw.get("submitted")
         if raw_submitted:
             try:
-                biosample_first_created = datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
-            except ValueError:
+                dt = datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
+                biosample_first_created = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+            except (ValueError, TypeError):
                 logger.warning(f"Could not parse BioSamples 'submitted' date: {raw_submitted}")
 
         version, version_created = IngestVersion.objects.update_or_create(
@@ -130,10 +132,9 @@ class Command(BaseCommand):
                 "pipeline_version": pipeline_version,
                 "release": release,
                 "last_modified_internal": upstream_last_modified,
-                "upstream_version": None,
             }
         )
-        logger.debug(f"IngestVersion id={version.pk} label={version.label}", "Created" if version_created else "Using existing")
+        logger.debug(f"IngestVersion id={version.pk} label={version.label} ({'Created' if version_created else 'Using existing'})")
 
         # Curate sample fields
         logger.info(f"Curating metadata for {fetch_acc}")
@@ -210,7 +211,7 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to create/update Sample for {accession}: {e}")
 
-        logger.info(f"Sample id={sample.pk} ({sample})", "Created" if created else "Updated")
+        logger.info(f"Sample id={sample.pk} ({sample}) ({'Created' if created else 'Updated'})")
 
         # Populate ExternalResource for BioSamples
         logger.debug(f"ExternalResource for {sample.biosample}")
@@ -248,8 +249,9 @@ class Command(BaseCommand):
                 if not raw:
                     return None
                 try:
-                    return timezone.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                except ValueError:
+                    dt = timezone.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    return dt if timezone.is_aware(dt) else timezone.make_aware(dt)
+                except (ValueError, TypeError):
                     return None
 
             for run_item in runs_data:
