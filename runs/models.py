@@ -22,14 +22,6 @@ class Run(models.Model):
         related_name="runs",
     )
 
-    previous_ingest = models.ForeignKey(
-        IngestVersion,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="previous_for_runs",
-    )
-
     read_count = models.BigIntegerField(null=True, blank=True)
     sequencer = models.CharField(max_length=255, null=True, blank=True)
     library_source = models.CharField(max_length=100, null=True, blank=True)

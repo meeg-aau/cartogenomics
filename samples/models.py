@@ -36,27 +36,17 @@ class Sample(models.Model):
         GTDB = "GTDB"
         ENA = "ENA"
 
-
     ena_sample = models.CharField(max_length=50, null=True, blank=True, unique=True, validators=[validate_ena_sample])
     biosample = models.CharField(max_length=50, null=True, blank=True, unique=True, validators=[validate_biosample])
 
     source_dataset = models.CharField(max_length=50, default="", choices=SourceDataset.choices)
 
-    # link to ingest version
     ingest = models.ForeignKey(
         IngestVersion,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="samples",
-    )
-    # set to the previous ingest when any curated field changes on re-ingest
-    previous_ingest = models.ForeignKey(
-        IngestVersion,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="previous_for_samples",
     )
 
     latitude = models.FloatField(null=True, blank=True)
@@ -74,3 +64,38 @@ class Sample(models.Model):
 
     def __str__(self):
         return self.biosample or self.ena_sample or "Unnamed Sample"
+
+
+class SampleVersion(models.Model):
+    """Immutable snapshot of a Sample's curated fields at each ingest where fields changed."""
+
+    sample = models.ForeignKey(
+        Sample,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    ingest = models.ForeignKey(
+        IngestVersion,
+        on_delete=models.PROTECT,
+        related_name="sample_versions",
+    )
+    valid_from = models.DateTimeField()
+    valid_to = models.DateTimeField(null=True, blank=True)
+
+    biosample = models.CharField(max_length=50, null=True, blank=True)
+    ena_sample = models.CharField(max_length=50, null=True, blank=True)
+    source_dataset = models.CharField(max_length=50, default="")
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    region = models.CharField(max_length=1000, null=True, blank=True)
+    locality = models.CharField(max_length=1000, null=True, blank=True)
+    ontology = models.CharField(null=True, blank=True)
+    geography_check_status = models.CharField(max_length=1000, null=True, blank=True)
+    geography_status_reason = models.CharField(max_length=1000, null=True, blank=True)
+    raw_metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["valid_from"]
+
+    def __str__(self):
+        return f"{self.sample} @ {self.ingest}"

@@ -72,7 +72,7 @@ class Command(BaseCommand):
         if not run_acc:
             raise CommandError(f"Could not resolve a run accession from {accession}")
 
-        # Sample must already exist — ingest_sample should be run first
+        # Sample must already exist - ingest_sample should be run first
         lookup = {}
         if biosample_acc:
             lookup["biosample"] = biosample_acc
@@ -124,8 +124,6 @@ class Command(BaseCommand):
             "library_strategy": run_data.get("library_strategy"),
         }
 
-        # Detect changes on re-ingest and record previous ingest
-        previous_ingest = None
         try:
             existing = Run.objects.get(accession=run_acc)
             changed_fields = [
@@ -133,30 +131,18 @@ class Command(BaseCommand):
                 if getattr(existing, field) != value
             ]
             if changed_fields:
-                logger.info(
-                    f"Run {run_acc} already exists (id={existing.pk}) — "
-                    f"{len(changed_fields)} field(s) changed: {changed_fields}. "
-                    f"Updating and recording previous IngestVersion id={existing.ingest_id}."
-                )
-                previous_ingest = existing.ingest
+                logger.info(f"Run {run_acc} already exists (id={existing.pk}) - {len(changed_fields)} field(s) changed: {changed_fields}.")
             else:
-                logger.info(
-                    f"Run {run_acc} already exists (id={existing.pk}) — no fields changed. "
-                    "Updating ingest pointer only."
-                )
+                logger.info(f"Run {run_acc} already exists (id={existing.pk}) - no fields changed.")
         except Run.DoesNotExist:
-            logger.info(f"Run {run_acc} not found in DB — will be created.")
-
-        defaults = {**curated_defaults, "ingest": ingest}
-        if previous_ingest is not None:
-            defaults["previous_ingest"] = previous_ingest
+            logger.info(f"Run {run_acc} not found in DB - will be created.")
 
         run, created = Run.objects.update_or_create(
             accession=run_acc,
-            defaults=defaults,
+            defaults={**curated_defaults, "ingest": ingest},
         )
 
-        # ExternalResource — ENA browser link
+        # ExternalResource - ENA browser link
         ExternalResource.objects.update_or_create(
             source_system=ExternalResource.SourceSystem.ENA,
             accession=run_acc,
@@ -171,7 +157,7 @@ class Command(BaseCommand):
             },
         )
 
-        # ExternalResource — one row per FASTQ file
+        # ExternalResource - one row per FASTQ file
         fastq_ftp = run_data.get("fastq_ftp") or ""
         for ftp_path in fastq_ftp.split(";"):
             ftp_path = ftp_path.strip()

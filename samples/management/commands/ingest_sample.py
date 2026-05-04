@@ -6,7 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from versions.models import IngestVersion, CartogenomicsRelease
-from samples.models import Sample
+from samples.models import Sample, SampleVersion
 from runs.models import Run
 from external.models import ExternalResource
 
@@ -84,7 +84,6 @@ class Command(BaseCommand):
 
         logger.debug(f"Resolved accessions: biosample={biosample_acc} ena_sample={ena_sample_acc}")
 
-        # Fetch raw BioSample JSON using biosample_acc if available, otherwise fall back to ena_sample_acc
         fetch_acc = biosample_acc or ena_sample_acc
         if not fetch_acc:
             raise CommandError(
@@ -103,9 +102,6 @@ class Command(BaseCommand):
         # Set up IngestVersion
         release, _ = CartogenomicsRelease.objects.get_or_create(label=release_label)
 
-        # BioSamples date fields:
-        #   "update" → when the record was last modified
-        #   "submitted" → when the record was first submitted to BioSamples
         upstream_last_modified = None
         raw_update = raw.get("update")
         if raw_update:
@@ -136,7 +132,6 @@ class Command(BaseCommand):
         )
         logger.debug(f"IngestVersion id={version.pk} label={version.label} ({'Created' if version_created else 'Using existing'})")
 
-        # Curate sample fields
         logger.info(f"Curating metadata for {fetch_acc}")
         try:
             curated = curate_biosample(
@@ -152,7 +147,6 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to curate BioSample {fetch_acc}: {e}")
 
-        # Choose a stable lookup key for update_or_create
         lookup = {}
         if biosample_acc:
             lookup["biosample"] = biosample_acc
@@ -177,8 +171,7 @@ class Command(BaseCommand):
             "raw_metadata": curated,
         }
 
-        # Detect whether any curated field changed on re-ingest
-        previous_ingest = None
+        changed_fields = []
         try:
             existing = Sample.objects.get(**lookup)
             changed_fields = [
@@ -187,33 +180,44 @@ class Command(BaseCommand):
             ]
             if changed_fields:
                 logger.info(
-                    f"Sample {fetch_acc} already exists (id={existing.pk}) — {len(changed_fields)} field(s) changed: {changed_fields}. "
-                    f"Updating in place and recording previous IngestVersion id={existing.ingest}."
+                    f"Sample {fetch_acc} already exists (id={existing.pk}) - {len(changed_fields)} field(s) changed: {changed_fields}."
                 )
-                previous_ingest = existing.ingest
             else:
                 logger.info(
-                    f"Sample {fetch_acc} already exists (id={existing.pk}) and no curated fields have changed. "
-                    "Updating ingest pointer only — existing row preserved as is."
+                    f"Sample {fetch_acc} already exists (id={existing.pk}) and no curated fields have changed."
                 )
         except Sample.DoesNotExist:
-            logger.info(f"Sample {fetch_acc} not found in DB — will be created.")
-
-        defaults = {**curated_defaults, "ingest": version}
-        if previous_ingest is not None:
-            defaults["previous_ingest"] = previous_ingest
+            logger.info(f"Sample {fetch_acc} not found in DB - will be created.")
 
         try:
             sample, created = Sample.objects.update_or_create(
                 **lookup,
-                defaults=defaults,
+                defaults={**curated_defaults, "ingest": version},
             )
         except Exception as e:
             raise CommandError(f"Failed to create/update Sample for {accession}: {e}")
 
         logger.info(f"Sample id={sample.pk} ({sample}) ({'Created' if created else 'Updated'})")
 
-        # Populate ExternalResource for BioSamples
+        now = timezone.now()
+        if created:
+            SampleVersion.objects.create(
+                sample=sample,
+                ingest=version,
+                valid_from=now,
+                valid_to=None,
+                **curated_defaults,
+            )
+        elif changed_fields:
+            SampleVersion.objects.filter(sample=sample, valid_to__isnull=True).update(valid_to=now)
+            SampleVersion.objects.create(
+                sample=sample,
+                ingest=version,
+                valid_from=now,
+                valid_to=None,
+                **curated_defaults,
+            )
+
         logger.debug(f"ExternalResource for {sample.biosample}")
         try:
             ExternalResource.objects.update_or_create(
@@ -270,25 +274,19 @@ class Command(BaseCommand):
                     "library_strategy": run_item.get("library_strategy"),
                 }
 
-                previous_run_ingest = None
                 try:
                     existing_run = Run.objects.get(accession=run_acc)
                     changed = [f for f, v in run_curated.items() if getattr(existing_run, f) != v]
                     if changed:
-                        logger.info(f"Run {run_acc} changed fields: {changed}. Recording previous ingest.")
-                        previous_run_ingest = existing_run.ingest
+                        logger.info(f"Run {run_acc} changed fields: {changed}.")
                     else:
-                        logger.info(f"Run {run_acc} — no fields changed.")
+                        logger.info(f"Run {run_acc} - no fields changed.")
                 except Run.DoesNotExist:
-                    logger.info(f"Run {run_acc} not found — will be created.")
-
-                run_defaults = {**run_curated, "ingest": run_ingest}
-                if previous_run_ingest is not None:
-                    run_defaults["previous_ingest"] = previous_run_ingest
+                    logger.info(f"Run {run_acc} not found - will be created.")
 
                 run_obj, run_created = Run.objects.update_or_create(
                     accession=run_acc,
-                    defaults=run_defaults,
+                    defaults={**run_curated, "ingest": run_ingest},
                 )
 
                 ExternalResource.objects.update_or_create(
