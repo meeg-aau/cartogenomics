@@ -377,7 +377,6 @@ def _add_sample(crate: ROCrate, sample) -> None:
         "@type": ["schema:BioSample", "Thing"],
         "name": identifier,
         "identifier": [v for v in [sample.biosample, sample.ena_sample] if v],
-        "additionalProperty": sample.raw_metadata or {},
         "dateCreated": _fmt_date(sample.created_at),
         "dateModified": _fmt_date(sample.updated_at),
         "wasGeneratedBy": {"@id": _ingest_entity_id(sample.ingest)},
