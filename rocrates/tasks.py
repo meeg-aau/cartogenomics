@@ -15,10 +15,12 @@ def build_rocrate_task(job_id):
     job.save(update_fields=["status"])
 
     try:
+        from rocrates.preview import generate_preview
         crate = build_crate(**job.params)
         output_path = f"/tmp/rocrate_{job_id}.zip"
         with tempfile.TemporaryDirectory() as tmpdir:
             crate.write(tmpdir)
+            generate_preview(tmpdir)
             with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for root, _, files in os.walk(tmpdir):
                     for fname in files:
