@@ -233,8 +233,10 @@ def _set_root_metadata(
 
     if any(v is not None for v in [lat_min, lat_max, lon_min, lon_max]):
         crate.root_dataset["spatialCoverage"] = {
+            "@id": "#spatial-coverage",
             "@type": "Place",
             "geo": {
+                "@id": "#spatial-coverage-geo",
                 "@type": "GeoShape",
                 "box": f"{lat_min} {lon_min} {lat_max} {lon_max}",
             },
