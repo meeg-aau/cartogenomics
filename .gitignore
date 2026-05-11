@@ -61,6 +61,10 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Large generated data files — regenerate with utils/generate_mock_abundance.py
+*.parquet
+/tmp/rocrate_*.zip
+
 # Flask stuff:
 instance/
 .webassets-cache

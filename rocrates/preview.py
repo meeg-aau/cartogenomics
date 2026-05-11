@@ -35,7 +35,13 @@ def generate_preview(crate_dir: str) -> None:
     releases  = [e for e in entities if _has_type(e, "schema:Dataset") or (
                   _has_type(e, "Dataset") and e["@id"].startswith("#release-"))]
 
-    html = _render(root, graph, samples, runs, genomes, files, actions, pipelines, releases, metadata)
+    try:
+        from django.conf import settings
+        abundance_file = getattr(settings, "ABUNDANCE_FILE", None)
+    except Exception:
+        abundance_file = None
+
+    html = _render(root, graph, samples, runs, genomes, files, actions, pipelines, releases, metadata, abundance_file)
 
     out_path = os.path.join(crate_dir, "ro-crate-preview.html")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -247,6 +253,164 @@ def _sec_provenance(actions: list, pipelines: list, releases: list, graph: dict)
     return html or '<p style="color:var(--muted)">No provenance entities.</p>'
 
 
+def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> str:
+    if not genomes or not runs:
+        return '<p style="color:var(--muted)">Abundance view requires both genomes and runs in this export.</p>'
+    if not abundance_file or not os.path.exists(abundance_file):
+        return '<p style="color:var(--muted)">Abundance Parquet file not configured or not found on this system.</p>'
+
+    try:
+        import duckdb
+    except ImportError:
+        return '<p style="color:var(--muted)">DuckDB not installed — cannot read abundance data.</p>'
+
+    genome_accessions = [g["@id"].replace("#genome-", "") for g in genomes]
+    genome_taxonomy   = {g["@id"].replace("#genome-", ""): g.get("taxonomicRange", "") for g in genomes}
+
+    run_accessions = [r["@id"].replace("#run-", "") for r in runs]
+    run_to_sample  = {}
+    for r in runs:
+        acc = r["@id"].replace("#run-", "")
+        ref = r.get("sample", {})
+        if isinstance(ref, dict):
+            run_to_sample[acc] = ref.get("@id", "").replace("#sample-", "")
+
+    sample_meta = {}
+    for s in samples:
+        bs = s.get("name", "")
+        sample_meta[bs] = {
+            "region":   s.get("addressRegion", ""),
+            "locality": s.get("addressLocality", ""),
+            "lat": s.get("latitude"),
+            "lon": s.get("longitude"),
+        }
+
+    con = duckdb.connect()
+    try:
+        parquet_cols = {row[0] for row in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
+        ).fetchall()}
+        matching_runs    = [r for r in run_accessions    if r in parquet_cols]
+        matching_genomes = [g for g in genome_accessions if True]
+
+        if not matching_runs:
+            return '<p style="color:var(--muted)">No run accessions in this export matched the abundance Parquet columns.</p>'
+
+        col_select  = ", ".join(f'"{r}"' for r in matching_runs)
+        genome_list = ", ".join(f"'{g}'" for g in matching_genomes)
+
+        rows = con.execute(f"""
+            WITH long AS (
+                UNPIVOT (
+                    SELECT genome_id, {col_select}
+                    FROM read_parquet('{abundance_file}')
+                    WHERE genome_id IN ({genome_list})
+                )
+                ON COLUMNS(* EXCLUDE genome_id)
+                INTO NAME run_id VALUE abundance
+            )
+            SELECT genome_id, run_id, abundance
+            FROM long
+            WHERE abundance > 0
+        """).fetchall()
+    finally:
+        con.close()
+
+    # Aggregate per sample: max abundance across runs for each genome
+    sample_abund = {}  # {sample_bs: {genome_acc: max_pct}}
+    for genome_id, run_id, abund in rows:
+        bs = run_to_sample.get(run_id, run_id)
+        sample_abund.setdefault(bs, {})
+        pct = round(float(abund) * 100, 1)
+        if pct > sample_abund[bs].get(genome_id, 0):
+            sample_abund[bs][genome_id] = pct
+
+    js_samples = json.dumps([
+        {
+            "id":       bs,
+            "region":   sample_meta.get(bs, {}).get("region", ""),
+            "locality": sample_meta.get(bs, {}).get("locality", ""),
+            "lat":      sample_meta.get(bs, {}).get("lat"),
+            "lon":      sample_meta.get(bs, {}).get("lon"),
+            "abund":    sample_abund.get(bs, {}),
+        }
+        for bs in sample_meta
+    ])
+    js_genomes = json.dumps([
+        {"id": acc, "taxonomy": genome_taxonomy.get(acc, "")}
+        for acc in genome_accessions
+    ])
+
+    options_html = "\n".join(
+        f'<option value="{_esc(acc)}">{_esc(acc)}'
+        f'{(" — " + genome_taxonomy[acc][:40]) if genome_taxonomy.get(acc) else ""}</option>'
+        for acc in genome_accessions
+    )
+
+    return f"""
+<div style="display:flex;gap:12px;margin-bottom:24px;align-items:center;flex-wrap:wrap;">
+  <label style="font-size:12px;color:var(--muted);">Genome</label>
+  <select id="genome-sel" onchange="filterAbundance()"
+    style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 12px;font-size:13px;max-width:360px;">
+    {options_html}
+  </select>
+  <label style="font-size:12px;color:var(--muted);">Min abundance</label>
+  <input id="abund-thresh" type="range" min="0" max="100" value="0"
+    oninput="filterAbundance(); document.getElementById('abund-val').textContent=this.value+'%'"
+    style="width:140px;accent-color:var(--accent);" />
+  <span id="abund-val" style="font-size:13px;font-family:monospace;color:var(--accent);">0%</span>
+  <span id="match-count" style="font-size:12px;color:var(--muted);margin-left:8px;"></span>
+</div>
+<div style="overflow-x:auto;">
+  <table id="matrix-table" style="border-collapse:collapse;font-size:12px;width:100%;">
+    <thead>
+      <tr>
+        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:600;">Sample</th>
+        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);">Location</th>
+        <th id="genome-col-header" style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--purple);text-align:center;"></th>
+      </tr>
+    </thead>
+    <tbody id="matrix-body"></tbody>
+  </table>
+</div>
+<script>
+const _samples = {js_samples};
+const _genomes = {js_genomes};
+function abundColor(v) {{
+  if (!v) return 'var(--muted)';
+  if (v >= 80) return 'var(--green)';
+  if (v >= 50) return 'var(--amber)';
+  return 'var(--red)';
+}}
+function filterAbundance() {{
+  const sel    = document.getElementById('genome-sel').value;
+  const thresh = parseFloat(document.getElementById('abund-thresh').value);
+  const gMeta  = _genomes.find(g => g.id === sel) || {{}};
+  document.getElementById('genome-col-header').textContent = sel + (gMeta.taxonomy ? ' — ' + gMeta.taxonomy.slice(0,40) : '');
+  const sorted = [..._samples].sort((a,b) => (b.abund[sel]||0) - (a.abund[sel]||0));
+  let html = '', matches = 0;
+  for (const s of sorted) {{
+    const v = s.abund[sel] || 0;
+    const pass = v >= thresh;
+    if (pass) matches++;
+    const loc = [s.locality, s.region].filter(Boolean).join(', ') || '—';
+    html += `<tr style="opacity:${{pass||thresh===0?1:0.35}};transition:opacity .2s;">
+      <td style="padding:8px 12px;border-bottom:1px solid var(--border);font-family:monospace;font-size:12px;color:var(--green);white-space:nowrap;">${{s.id}}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap;">${{loc}}</td>
+      <td style="text-align:center;padding:8px 12px;border-bottom:1px solid var(--border);${{pass&&thresh>0?'background:rgba(61,214,140,.07);':''}}">
+        <span style="font-family:monospace;font-weight:${{pass&&thresh>0?'700':'400'}};color:${{abundColor(v)}};">${{v?v.toFixed(1)+'%':'—'}}</span>
+        ${{pass&&thresh>0?'<span style="font-size:10px;color:var(--green);margin-left:4px;">✓</span>':''}}
+      </td>
+    </tr>`;
+  }}
+  document.getElementById('matrix-body').innerHTML = html;
+  document.getElementById('match-count').textContent =
+    thresh > 0 ? `${{matches}} of ${{_samples.length}} samples ≥ ${{thresh}}%` : `${{_samples.length}} samples`;
+}}
+window.addEventListener('DOMContentLoaded', () => filterAbundance());
+</script>"""
+
+
 def _sec_jsonld(metadata: dict) -> str:
     raw = json.dumps(metadata, indent=2, ensure_ascii=False)
     return f"""
@@ -262,7 +426,7 @@ def _sec_jsonld(metadata: dict) -> str:
 # Full HTML renderer
 # ---------------------------------------------------------------------------
 
-def _render(root, graph, samples, runs, genomes, files, actions, pipelines, releases, metadata) -> str:
+def _render(root, graph, samples, runs, genomes, files, actions, pipelines, releases, metadata, abundance_file=None) -> str:
     name = root.get("name", "Cartogenomics Export")
     pub  = root.get("datePublished", str(date.today()))
     release_ids = [r["@id"].replace("#release-", "") for r in releases if r["@id"].startswith("#release-")]
@@ -324,6 +488,11 @@ def _render(root, graph, samples, runs, genomes, files, actions, pipelines, rele
       <span class="icon">⚙️</span> Ingest &amp; Pipeline
     </a>
     <hr class="nav-sep" />
+    <h3>Data</h3>
+    <a class="nav-item" onclick="showSection('abundance', this)">
+      <span class="icon">📊</span> Abundance <span class="nav-count">{len(genomes)}×{len(samples)}</span>
+    </a>
+    <hr class="nav-sep" />
     <h3>Raw</h3>
     <a class="nav-item" onclick="showSection('jsonld', this)">
       <span class="icon">{{ }}</span> JSON-LD
@@ -353,6 +522,10 @@ def _render(root, graph, samples, runs, genomes, files, actions, pipelines, rele
     <section id="sec-provenance">
       <div class="section-heading"><h2>Provenance</h2><p>Ingest actions, pipelines, and releases</p></div>
       {_sec_provenance(actions, pipelines, releases, graph)}
+    </section>
+    <section id="sec-abundance">
+      <div class="section-heading"><h2>Genome × Sample Abundance</h2><p>Abundance values from Parquet — aggregated per sample as max across runs. Select a genome and drag the threshold slider to filter rows.</p></div>
+      {_sec_abundance(genomes, runs, samples, abundance_file)}
     </section>
     <section id="sec-jsonld">
       <div class="section-heading"><h2>JSON-LD</h2><p>Raw ro-crate-metadata.json</p></div>
