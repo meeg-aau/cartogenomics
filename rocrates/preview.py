@@ -374,10 +374,10 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
 const _samples = {js_samples};
 const _genomes = {js_genomes};
 function abundColor(v) {{
-  if (!v) return 'rgba(136,145,168,.15)';
-  if (v >= 80) return 'rgba(61,214,140,.7)';
-  if (v >= 50) return 'rgba(245,166,35,.6)';
-  return 'rgba(240,101,101,.45)';
+  if (!v) return 'var(--muted)';
+  if (v >= 80) return 'var(--green)';
+  if (v >= 50) return 'var(--amber)';
+  return 'var(--red)';
 }}
 function filterAbundance() {{
   const thresh = parseFloat(document.getElementById('abund-thresh').value);
@@ -389,11 +389,8 @@ function filterAbundance() {{
     const loc = [s.locality, s.region].filter(Boolean).join(', ') || '—';
     const cells = _genomes.map(g => {{
       const v = s.abund[g.id] || 0;
-      const bg = abundColor(v);
-      const label = v ? v.toFixed(1)+'%' : '';
       return `<td style="text-align:center;padding:4px 6px;border-bottom:1px solid var(--border);">
-        <span style="display:inline-block;min-width:36px;padding:2px 4px;border-radius:4px;
-          background:${{bg}};font-family:monospace;font-size:11px;color:var(--text);">${{label}}</span>
+        <span style="font-family:monospace;font-size:11px;color:${{abundColor(v)}};">${{v ? v.toFixed(1)+'%' : '—'}}</span>
       </td>`;
     }}).join('');
     html += `<tr style="opacity:${{pass||thresh===0?1:0.25}};transition:opacity .2s;">
