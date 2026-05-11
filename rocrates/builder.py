@@ -80,6 +80,10 @@ def build_crate(
     genome_release_label: str | None = None,
     min_completeness: float | None = None,
     max_contamination: float | None = None,
+
+    # --- Abundance cross-filter ---
+    link_via_abundance: bool = False,
+    min_abundance: float = 0.0,
 ) -> ROCrate:
     """
     Build and return an ROCrate.
@@ -104,12 +108,6 @@ def build_crate(
                 lon_min=lon_min, lon_max=lon_max,
                 release_label=release_label,
             )
-        sample_queryset = sample_queryset.select_related("ingest__release").prefetch_related(
-            "external_resources",
-            "runs__external_resources",
-            "runs__ingest",
-        )
-        samples = list(sample_queryset)
 
     if include_genomes:
         if genome_queryset is None:
@@ -119,6 +117,21 @@ def build_crate(
                 min_completeness=min_completeness,
                 max_contamination=max_contamination,
             )
+
+    if link_via_abundance and include_samples and include_genomes:
+        sample_queryset, genome_queryset = _cross_filter_via_abundance(
+            sample_queryset, genome_queryset, min_abundance=min_abundance,
+        )
+
+    if include_samples:
+        sample_queryset = sample_queryset.select_related("ingest__release").prefetch_related(
+            "external_resources",
+            "runs__external_resources",
+            "runs__ingest",
+        )
+        samples = list(sample_queryset)
+
+    if include_genomes:
         genome_queryset = genome_queryset.select_related("ingest__release").prefetch_related(
             "external_resources",
         )
@@ -156,6 +169,79 @@ def build_crate(
         _add_genome(crate, genome)
 
     return crate
+
+
+# ---------------------------------------------------------------------------
+# Abundance cross-filter
+# ---------------------------------------------------------------------------
+
+def _cross_filter_via_abundance(sample_qs, genome_qs, *, min_abundance: float = 0.0):
+    """
+    Given already-filtered sample and genome querysets, narrow both using the
+    abundance Parquet file: keep only genomes detected (above min_abundance)
+    in the filtered samples' runs, and only samples whose runs contain at
+    least one of those genomes.
+    """
+    import os
+    import duckdb
+    from django.conf import settings
+    from runs.models import Run
+
+    abundance_file = getattr(settings, "ABUNDANCE_FILE", None)
+    if not abundance_file or not os.path.exists(abundance_file):
+        return sample_qs, genome_qs
+
+    run_accessions = list(
+        Run.objects.filter(sample__in=sample_qs).values_list("accession", flat=True)
+    )
+    genome_accessions = list(genome_qs.values_list("accession", flat=True))
+
+    if not run_accessions or not genome_accessions:
+        return sample_qs.none(), genome_qs.none()
+
+    con = duckdb.connect()
+
+    # Discover which run accessions actually exist as columns in the file
+    parquet_cols = {row[0] for row in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
+    ).fetchall()}
+    matching_runs = [r for r in run_accessions if r in parquet_cols]
+
+    if not matching_runs:
+        return sample_qs.none(), genome_qs.none()
+
+    # Only project the columns we need — avoids materialising the full wide matrix
+    col_select = ", ".join(f'"{r}"' for r in matching_runs)
+    genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
+
+    row = con.execute(f"""
+        WITH long AS (
+            UNPIVOT (
+                SELECT genome_id, {col_select}
+                FROM read_parquet('{abundance_file}')
+                WHERE genome_id IN ({genome_list})
+            )
+            ON COLUMNS(* EXCLUDE genome_id)
+            INTO NAME run_id VALUE abundance
+        )
+        SELECT
+            array_agg(DISTINCT genome_id) AS present_genomes,
+            array_agg(DISTINCT run_id)    AS present_runs
+        FROM long
+        WHERE abundance > {min_abundance}
+    """).fetchone()
+
+    con.close()
+
+    if row is None or row[0] is None:
+        return sample_qs.none(), genome_qs.none()
+
+    present_genomes, present_runs = row
+
+    return (
+        sample_qs.filter(runs__accession__in=present_runs).distinct(),
+        genome_qs.filter(accession__in=present_genomes),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -93,6 +93,23 @@
       </div>
     </div>
 
+    <div class="card mb-3 d-none" id="abundance-card">
+      <div class="card-header fw-semibold">Abundance cross-filter</div>
+      <div class="card-body">
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" name="link_via_abundance" id="link_via_abundance">
+          <label class="form-check-label" for="link_via_abundance">
+            Link samples and genomes via abundance matrix
+          </label>
+          <div class="form-text">Only includes genomes detected in the filtered samples (and vice versa), using the configured abundance Parquet file.</div>
+        </div>
+        <div id="abundance-fields" class="d-none">
+          <label class="form-label">Minimum abundance threshold <span class="text-muted">(default 0 — any detection)</span></label>
+          <input type="number" step="any" min="0" max="1" name="min_abundance" class="form-control" style="max-width: 200px;" placeholder="0.0">
+        </div>
+      </div>
+    </div>
+
     <div class="card mb-4">
       <div class="card-header fw-semibold">Export options</div>
       <div class="card-body">
@@ -106,11 +123,26 @@
 </div>
 
 <script>
+  function updateAbundanceCard() {
+    const bothChecked = document.getElementById("include_samples").checked &&
+                        document.getElementById("include_genomes").checked;
+    document.getElementById("abundance-card").classList.toggle("d-none", !bothChecked);
+    if (!bothChecked) {
+      document.getElementById("link_via_abundance").checked = false;
+      document.getElementById("abundance-fields").classList.add("d-none");
+    }
+  }
+
   document.getElementById("include_genomes").addEventListener("change", function () {
     document.getElementById("genome-fields").classList.toggle("d-none", !this.checked);
+    updateAbundanceCard();
   });
   document.getElementById("include_samples").addEventListener("change", function () {
     document.getElementById("sample-fields").classList.toggle("d-none", !this.checked);
+    updateAbundanceCard();
+  });
+  document.getElementById("link_via_abundance").addEventListener("change", function () {
+    document.getElementById("abundance-fields").classList.toggle("d-none", !this.checked);
   });
 </script>
 </body>

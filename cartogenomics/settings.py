@@ -97,6 +97,9 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Abundance Parquet file for RO-Crate cross-filtering
+ABUNDANCE_FILE = os.environ.get("ABUNDANCE_FILE", os.path.join(BASE_DIR, "mock_abundance.parquet"))
+
 # Celery
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
