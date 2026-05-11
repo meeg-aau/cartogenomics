@@ -373,7 +373,7 @@ def _set_root_metadata(
         }
 
     # Store all active filters for the HTML preview
-    filters = {"includeSamples": include_samples, "includeGenomes": include_genomes}
+    filters = {"@id": "#export-filters", "includeSamples": include_samples, "includeGenomes": include_genomes}
     if include_samples:
         if source_dataset:     filters["sourceDataset"]   = source_dataset
         if ontology:           filters["ontology"]        = ontology
