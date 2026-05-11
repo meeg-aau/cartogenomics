@@ -341,33 +341,30 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
         for acc in genome_accessions
     ])
 
-    options_html = "\n".join(
-        f'<option value="{_esc(acc)}">{_esc(acc)}'
-        f'{(" — " + genome_taxonomy[acc][:40]) if genome_taxonomy.get(acc) else ""}</option>'
+    genome_headers = "".join(
+        f'<th style="padding:6px 10px;border-bottom:1px solid var(--border);color:var(--purple);'
+        f'text-align:center;white-space:nowrap;font-size:11px;writing-mode:vertical-rl;'
+        f'transform:rotate(180deg);max-height:120px;" title="{_esc(genome_taxonomy.get(acc,""))}">'
+        f'{_esc(acc)}</th>'
         for acc in genome_accessions
     )
 
     return f"""
 <div style="display:flex;gap:12px;margin-bottom:24px;align-items:center;flex-wrap:wrap;">
-  <label style="font-size:12px;color:var(--muted);">Genome</label>
-  <select id="genome-sel" onchange="filterAbundance()"
-    style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 12px;font-size:13px;max-width:360px;">
-    {options_html}
-  </select>
   <label style="font-size:12px;color:var(--muted);">Min abundance</label>
   <input id="abund-thresh" type="range" min="0" max="100" value="0"
     oninput="filterAbundance(); document.getElementById('abund-val').textContent=this.value+'%'"
-    style="width:140px;accent-color:var(--accent);" />
+    style="width:160px;accent-color:var(--accent);" />
   <span id="abund-val" style="font-size:13px;font-family:monospace;color:var(--accent);">0%</span>
   <span id="match-count" style="font-size:12px;color:var(--muted);margin-left:8px;"></span>
 </div>
 <div style="overflow-x:auto;">
-  <table id="matrix-table" style="border-collapse:collapse;font-size:12px;width:100%;">
+  <table id="matrix-table" style="border-collapse:collapse;font-size:12px;">
     <thead>
       <tr>
-        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:600;">Sample</th>
-        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);">Location</th>
-        <th id="genome-col-header" style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--purple);text-align:center;"></th>
+        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:600;white-space:nowrap;">Sample</th>
+        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap;">Location</th>
+        {genome_headers}
       </tr>
     </thead>
     <tbody id="matrix-body"></tbody>
@@ -377,35 +374,37 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
 const _samples = {js_samples};
 const _genomes = {js_genomes};
 function abundColor(v) {{
-  if (!v) return 'var(--muted)';
-  if (v >= 80) return 'var(--green)';
-  if (v >= 50) return 'var(--amber)';
-  return 'var(--red)';
+  if (!v) return 'rgba(136,145,168,.15)';
+  if (v >= 80) return 'rgba(61,214,140,.7)';
+  if (v >= 50) return 'rgba(245,166,35,.6)';
+  return 'rgba(240,101,101,.45)';
 }}
 function filterAbundance() {{
-  const sel    = document.getElementById('genome-sel').value;
   const thresh = parseFloat(document.getElementById('abund-thresh').value);
-  const gMeta  = _genomes.find(g => g.id === sel) || {{}};
-  document.getElementById('genome-col-header').textContent = sel + (gMeta.taxonomy ? ' — ' + gMeta.taxonomy.slice(0,40) : '');
-  const sorted = [..._samples].sort((a,b) => (b.abund[sel]||0) - (a.abund[sel]||0));
   let html = '', matches = 0;
-  for (const s of sorted) {{
-    const v = s.abund[sel] || 0;
-    const pass = v >= thresh;
-    if (pass) matches++;
+  for (const s of _samples) {{
+    const maxV = Math.max(0, ..._genomes.map(g => s.abund[g.id] || 0));
+    const pass = maxV >= thresh;
+    if (pass && thresh > 0) matches++;
     const loc = [s.locality, s.region].filter(Boolean).join(', ') || '—';
-    html += `<tr style="opacity:${{pass||thresh===0?1:0.35}};transition:opacity .2s;">
-      <td style="padding:8px 12px;border-bottom:1px solid var(--border);font-family:monospace;font-size:12px;color:var(--green);white-space:nowrap;">${{s.id}}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap;">${{loc}}</td>
-      <td style="text-align:center;padding:8px 12px;border-bottom:1px solid var(--border);${{pass&&thresh>0?'background:rgba(61,214,140,.07);':''}}">
-        <span style="font-family:monospace;font-weight:${{pass&&thresh>0?'700':'400'}};color:${{abundColor(v)}};">${{v?v.toFixed(1)+'%':'—'}}</span>
-        ${{pass&&thresh>0?'<span style="font-size:10px;color:var(--green);margin-left:4px;">✓</span>':''}}
-      </td>
+    const cells = _genomes.map(g => {{
+      const v = s.abund[g.id] || 0;
+      const bg = abundColor(v);
+      const label = v ? v.toFixed(1)+'%' : '';
+      return `<td style="text-align:center;padding:4px 6px;border-bottom:1px solid var(--border);">
+        <span style="display:inline-block;min-width:36px;padding:2px 4px;border-radius:4px;
+          background:${{bg}};font-family:monospace;font-size:11px;color:var(--text);">${{label}}</span>
+      </td>`;
+    }}).join('');
+    html += `<tr style="opacity:${{pass||thresh===0?1:0.25}};transition:opacity .2s;">
+      <td style="padding:6px 12px;border-bottom:1px solid var(--border);font-family:monospace;font-size:11px;color:var(--green);white-space:nowrap;">${{s.id}}</td>
+      <td style="padding:6px 12px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap;font-size:11px;">${{loc}}</td>
+      ${{cells}}
     </tr>`;
   }}
   document.getElementById('matrix-body').innerHTML = html;
   document.getElementById('match-count').textContent =
-    thresh > 0 ? `${{matches}} of ${{_samples.length}} samples ≥ ${{thresh}}%` : `${{_samples.length}} samples`;
+    thresh > 0 ? `${{matches}} of ${{_samples.length}} samples with any genome ≥ ${{thresh}}%` : `${{_samples.length}} samples`;
 }}
 window.addEventListener('DOMContentLoaded', () => filterAbundance());
 </script>"""
