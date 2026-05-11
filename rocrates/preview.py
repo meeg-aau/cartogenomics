@@ -162,7 +162,69 @@ def _sec_overview(root: dict, samples, runs, genomes, files, actions, pipelines,
 <div style="color:var(--muted);font-size:13px;margin-bottom:20px">
   📅 Published {pub} &nbsp;·&nbsp; 🔖 Release: <code>{release_str}</code>
 </div>
-<div class="summary-grid">{stat_html}</div>"""
+<div class="summary-grid">{stat_html}</div>
+{_filter_summary(root)}"""
+
+
+def _filter_summary(root: dict) -> str:
+    f = root.get("exportFilters")
+    if not f:
+        return ""
+
+    def row(label, value):
+        return f'<tr><td class="fs-label">{_esc(label)}</td><td class="fs-value">{_esc(str(value))}</td></tr>'
+
+    def badge(text, cls=""):
+        return f'<span class="fs-badge {cls}">{_esc(text)}</span>'
+
+    sections = []
+
+    # Sample filters
+    if f.get("includeSamples"):
+        rows = []
+        if f.get("sourceDataset"):   rows.append(row("Source dataset", f["sourceDataset"]))
+        if f.get("releaseLabel"):     rows.append(row("Release", f["releaseLabel"]))
+        if f.get("ontology"):         rows.append(row("Biome / ontology", f["ontology"]))
+        has_bbox = any(k in f for k in ("latMin", "latMax", "lonMin", "lonMax"))
+        if has_bbox:
+            bbox = (
+                f'lat {f.get("latMin", "—")} → {f.get("latMax", "—")}, '
+                f'lon {f.get("lonMin", "—")} → {f.get("lonMax", "—")}'
+            )
+            rows.append(row("Bounding box", bbox))
+        runs_str = "included" if f.get("includeRuns", True) else "excluded"
+        rows.append(row("Sequencing runs", runs_str))
+        if not any(f.get(k) for k in ("sourceDataset", "releaseLabel", "ontology")) and not has_bbox:
+            rows.insert(0, f'<tr><td colspan="2" class="fs-none">No sample filters — all samples included</td></tr>')
+        table = f'<table class="fs-table">{"".join(rows)}</table>'
+        sections.append(f'<div class="fs-section"><div class="fs-heading">{badge("Samples", "badge-sample")} Filters</div>{table}</div>')
+
+    # Genome filters
+    if f.get("includeGenomes"):
+        rows = []
+        if f.get("genomeReleaseLabel"):  rows.append(row("Release", f["genomeReleaseLabel"]))
+        if f.get("minCompleteness") is not None: rows.append(row("Min completeness", f'{f["minCompleteness"]}%'))
+        if f.get("maxContamination") is not None: rows.append(row("Max contamination", f'{f["maxContamination"]}%'))
+        if not rows:
+            rows.append(f'<tr><td colspan="2" class="fs-none">No genome filters — all genomes included</td></tr>')
+        table = f'<table class="fs-table">{"".join(rows)}</table>'
+        sections.append(f'<div class="fs-section"><div class="fs-heading">{badge("Genomes", "badge-genome")} Filters</div>{table}</div>')
+
+    # Abundance
+    if f.get("linkViaAbundance"):
+        direction = f.get("abundanceDirection", "samples_to_genomes")
+        dir_label = "Samples → Genomes" if direction == "samples_to_genomes" else "Genomes → Samples"
+        threshold = f.get("minAbundance", 0.0)
+        threshold_str = str(threshold) if threshold else "0.0 (any detection)"
+        rows = [row("Direction", dir_label), row("Min abundance", threshold_str)]
+        table = f'<table class="fs-table">{"".join(rows)}</table>'
+        sections.append(f'<div class="fs-section"><div class="fs-heading">{badge("Abundance", "badge-abundance")} Cross-filter</div>{table}</div>')
+
+    if not sections:
+        return ""
+
+    inner = "".join(sections)
+    return f'<div class="filter-summary">{inner}</div>'
 
 
 def _sec_entities(entities: list, graph: dict) -> str:
@@ -382,4 +444,15 @@ def _css() -> str:
     .tab-btn.active { color:var(--text); border-bottom-color:var(--accent); }
     .tab-panel { display:none; }
     .tab-panel.active { display:block; }
+    .filter-summary { display:flex; flex-wrap:wrap; gap:16px; margin-top:28px; }
+    .fs-section { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px 20px; flex:1; min-width:220px; }
+    .fs-heading { font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+    .fs-badge { font-size:10px; font-weight:600; letter-spacing:.04em; border-radius:4px; padding:2px 7px; border:1px solid; }
+    .badge-sample   { color:var(--green);  background:rgba(61,214,140,.12);  border-color:rgba(61,214,140,.3); }
+    .badge-genome   { color:var(--purple); background:rgba(167,139,250,.12); border-color:rgba(167,139,250,.3); }
+    .badge-abundance{ color:var(--amber);  background:rgba(245,166,35,.12);  border-color:rgba(245,166,35,.3); }
+    .fs-table { width:100%; border-collapse:collapse; }
+    .fs-label { color:var(--muted); font-size:12px; white-space:nowrap; padding:4px 12px 4px 0; width:140px; vertical-align:top; }
+    .fs-value { font-size:13px; padding:4px 0; }
+    .fs-none  { color:var(--muted); font-size:12px; font-style:italic; padding:4px 0; }
     """

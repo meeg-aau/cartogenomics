@@ -82,8 +82,11 @@ def build_crate(
     max_contamination: float | None = None,
 
     # --- Abundance cross-filter ---
+    # direction="samples_to_genomes": keep all filtered samples, select genomes detected in them
+    # direction="genomes_to_samples": keep all filtered genomes, select samples containing them
     link_via_abundance: bool = False,
     min_abundance: float = 0.0,
+    abundance_direction: str = "samples_to_genomes",
 ) -> ROCrate:
     """
     Build and return an ROCrate.
@@ -120,7 +123,9 @@ def build_crate(
 
     if link_via_abundance and include_samples and include_genomes:
         sample_queryset, genome_queryset = _cross_filter_via_abundance(
-            sample_queryset, genome_queryset, min_abundance=min_abundance,
+            sample_queryset, genome_queryset,
+            min_abundance=min_abundance,
+            direction=abundance_direction,
         )
 
     if include_samples:
@@ -154,6 +159,14 @@ def build_crate(
         genome_release_label=genome_release_label,
         sample_count=len(samples),
         genome_count=len(genomes),
+        include_samples=include_samples,
+        include_runs=include_runs,
+        include_genomes=include_genomes,
+        min_completeness=min_completeness,
+        max_contamination=max_contamination,
+        link_via_abundance=link_via_abundance,
+        min_abundance=min_abundance,
+        abundance_direction=abundance_direction,
     )
 
     for sample in samples:
@@ -175,12 +188,19 @@ def build_crate(
 # Abundance cross-filter
 # ---------------------------------------------------------------------------
 
-def _cross_filter_via_abundance(sample_qs, genome_qs, *, min_abundance: float = 0.0):
+def _cross_filter_via_abundance(
+    sample_qs, genome_qs, *, min_abundance: float = 0.0, direction: str = "samples_to_genomes"
+):
     """
-    Given already-filtered sample and genome querysets, narrow both using the
-    abundance Parquet file: keep only genomes detected (above min_abundance)
-    in the filtered samples' runs, and only samples whose runs contain at
-    least one of those genomes.
+    Cross-filter samples and genomes using the abundance Parquet file.
+
+    direction="samples_to_genomes":
+        Keep all filtered samples unchanged.
+        Select only genomes detected (>= min_abundance) in those samples' runs.
+
+    direction="genomes_to_samples":
+        Keep all filtered genomes unchanged.
+        Select only samples whose runs contain those genomes (>= min_abundance).
     """
     import os
     import duckdb
@@ -191,57 +211,78 @@ def _cross_filter_via_abundance(sample_qs, genome_qs, *, min_abundance: float = 
     if not abundance_file or not os.path.exists(abundance_file):
         return sample_qs, genome_qs
 
-    run_accessions = list(
-        Run.objects.filter(sample__in=sample_qs).values_list("accession", flat=True)
-    )
-    genome_accessions = list(genome_qs.values_list("accession", flat=True))
-
-    if not run_accessions or not genome_accessions:
-        return sample_qs.none(), genome_qs.none()
-
     con = duckdb.connect()
-
-    # Discover which run accessions actually exist as columns in the file
     parquet_cols = {row[0] for row in con.execute(
         f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
     ).fetchall()}
-    matching_runs = [r for r in run_accessions if r in parquet_cols]
 
-    if not matching_runs:
-        return sample_qs.none(), genome_qs.none()
-
-    # Only project the columns we need — avoids materialising the full wide matrix
-    col_select = ", ".join(f'"{r}"' for r in matching_runs)
-    genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
-
-    row = con.execute(f"""
-        WITH long AS (
-            UNPIVOT (
-                SELECT genome_id, {col_select}
-                FROM read_parquet('{abundance_file}')
-                WHERE genome_id IN ({genome_list})
-            )
-            ON COLUMNS(* EXCLUDE genome_id)
-            INTO NAME run_id VALUE abundance
+    if direction == "samples_to_genomes":
+        # Anchor: samples. Derive: which genomes are detected in their runs?
+        run_accessions = list(
+            Run.objects.filter(sample__in=sample_qs).values_list("accession", flat=True)
         )
-        SELECT
-            array_agg(DISTINCT genome_id) AS present_genomes,
-            array_agg(DISTINCT run_id)    AS present_runs
-        FROM long
-        WHERE abundance > {min_abundance}
-    """).fetchone()
+        matching_runs = [r for r in run_accessions if r in parquet_cols]
+        if not matching_runs:
+            con.close()
+            return sample_qs, genome_qs.none()
 
-    con.close()
+        genome_accessions = list(genome_qs.values_list("accession", flat=True))
+        col_select = ", ".join(f'"{r}"' for r in matching_runs)
+        genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
 
-    if row is None or row[0] is None:
-        return sample_qs.none(), genome_qs.none()
+        result = con.execute(f"""
+            WITH long AS (
+                UNPIVOT (
+                    SELECT genome_id, {col_select}
+                    FROM read_parquet('{abundance_file}')
+                    WHERE genome_id IN ({genome_list})
+                )
+                ON COLUMNS(* EXCLUDE genome_id)
+                INTO NAME run_id VALUE abundance
+            )
+            SELECT array_agg(DISTINCT genome_id)
+            FROM long
+            WHERE abundance > {min_abundance}
+        """).fetchone()
+        con.close()
 
-    present_genomes, present_runs = row
+        present_genomes = result[0] if result and result[0] else []
+        # Samples are unchanged — only genomes are narrowed
+        return sample_qs, genome_qs.filter(accession__in=present_genomes)
 
-    return (
-        sample_qs.filter(runs__accession__in=present_runs).distinct(),
-        genome_qs.filter(accession__in=present_genomes),
-    )
+    else:  # genomes_to_samples
+        # Anchor: genomes. Derive: which samples have those genomes in their runs?
+        genome_accessions = list(genome_qs.values_list("accession", flat=True))
+        all_run_accessions = list(
+            Run.objects.filter(sample__in=sample_qs).values_list("accession", flat=True)
+        )
+        matching_runs = [r for r in all_run_accessions if r in parquet_cols]
+        if not matching_runs or not genome_accessions:
+            con.close()
+            return sample_qs.none(), genome_qs
+
+        col_select = ", ".join(f'"{r}"' for r in matching_runs)
+        genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
+
+        result = con.execute(f"""
+            WITH long AS (
+                UNPIVOT (
+                    SELECT genome_id, {col_select}
+                    FROM read_parquet('{abundance_file}')
+                    WHERE genome_id IN ({genome_list})
+                )
+                ON COLUMNS(* EXCLUDE genome_id)
+                INTO NAME run_id VALUE abundance
+            )
+            SELECT array_agg(DISTINCT run_id)
+            FROM long
+            WHERE abundance > {min_abundance}
+        """).fetchone()
+        con.close()
+
+        present_runs = result[0] if result and result[0] else []
+        # Genomes are unchanged — only samples are narrowed
+        return sample_qs.filter(runs__accession__in=present_runs).distinct(), genome_qs
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +326,9 @@ def _set_root_metadata(
     lat_min, lat_max, lon_min, lon_max,
     release_label, genome_release_label,
     sample_count, genome_count,
+    include_samples=True, include_runs=True, include_genomes=False,
+    min_completeness=None, max_contamination=None,
+    link_via_abundance=False, min_abundance=0.0, abundance_direction="samples_to_genomes",
 ):
     parts = []
     if source_dataset:
@@ -327,6 +371,27 @@ def _set_root_metadata(
                 "box": f"{lat_min} {lon_min} {lat_max} {lon_max}",
             },
         }
+
+    # Store all active filters for the HTML preview
+    filters = {"includeSamples": include_samples, "includeGenomes": include_genomes}
+    if include_samples:
+        if source_dataset:     filters["sourceDataset"]   = source_dataset
+        if ontology:           filters["ontology"]        = ontology
+        if lat_min is not None: filters["latMin"]         = lat_min
+        if lat_max is not None: filters["latMax"]         = lat_max
+        if lon_min is not None: filters["lonMin"]         = lon_min
+        if lon_max is not None: filters["lonMax"]         = lon_max
+        if release_label:      filters["releaseLabel"]    = release_label
+        filters["includeRuns"] = include_runs
+    if include_genomes:
+        if genome_release_label:    filters["genomeReleaseLabel"] = genome_release_label
+        if min_completeness is not None: filters["minCompleteness"]  = min_completeness
+        if max_contamination is not None: filters["maxContamination"] = max_contamination
+    if link_via_abundance:
+        filters["linkViaAbundance"]  = True
+        filters["minAbundance"]      = min_abundance
+        filters["abundanceDirection"] = abundance_direction
+    crate.root_dataset["exportFilters"] = filters
 
     # Link to the release entity if it exists in the DB
     effective_release = release_label or genome_release_label

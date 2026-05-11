@@ -31,6 +31,7 @@ def _parse_params(post):
         "max_contamination": _float(post.get("max_contamination")),
         "link_via_abundance": bool(post.get("link_via_abundance")),
         "min_abundance": _float(post.get("min_abundance")) or 0.0,
+        "abundance_direction": post.get("abundance_direction") or "samples_to_genomes",
     }
 
 
