@@ -1,12 +1,11 @@
 from typing import List, Dict, Optional, Any
-
 import requests
 import api_fetch.config as config
-from api_fetch.constants import ACCESSION_PREFIXES
+
 
 
 def get_accession_type(acc: str) -> Optional[str]:
-    for prefix, acc_type in ACCESSION_PREFIXES.items():
+    for prefix, acc_type in config.ENAConfig.ACCESSION_PREFIXES.items():
         if prefix in acc:
             return acc_type
     return None
@@ -14,20 +13,20 @@ def get_accession_type(acc: str) -> Optional[str]:
 
 class ENAClient:
     def __init__(self, api_config: config.ENAConfig = None):
-        self.config = api_config or config.ENAConfig()
-        self.portal_api_root = self.config.portal_api_root
+        self.config = api_config
 
     def get_request(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
         retry = 0
-        params = data.copy()
+        params = data
         params.update(self.config.portal_api_output)
         while retry < self.config.retry_count:
             try:
                 response = requests.get(
-                    url=str(self.portal_api_root),
+                    url=self.config.portal_api_root,
                     params=params,
                     timeout=self.config.timeout,
                 )
+                #   need to update with known error response codes
                 if response.ok:
                     return response.json()
             except requests.exceptions.RequestException:
@@ -38,8 +37,6 @@ class ENAClient:
     def get_all_run_accessions(self, acc: str) -> List[Dict[str, Any]]:
         """
         Return all runs associated with any ENA accession (run, experiment, biosample, sample).
-        Queries read_run directly for all input types — each returned dict contains both
-        resolved accession info and full run metadata.
         """
         acc_type = get_accession_type(acc)
         if acc_type == "run":
@@ -77,6 +74,9 @@ class ENAClient:
         return results
 
     def get_all_genome_accessions(self, acc: str) -> Dict[str, Any]:
+        """
+        Return all genomes associated with an accession - genome, sample, biosample
+        """
         acc_type = get_accession_type(acc)
         fields = self.config.genome_fields
 

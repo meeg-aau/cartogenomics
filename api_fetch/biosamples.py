@@ -1,6 +1,6 @@
 import logging
 from json import JSONDecodeError
-from typing import List, Dict
+from typing import Dict
 
 import requests
 
@@ -8,10 +8,9 @@ import api_fetch.config as config
 
 api_config = config.BiosamplesConfig()
 
-"""Functions to fetch sample and any existing structured data for a given sample accession from EBI BioSamples API"""
+"""fetch a sample and any existing structured data for a given sample accession from EBI BioSamples API"""
 
 BASE_URL = api_config.sample_api_root
-
 
 def get_basic_sample_data(sample: str) -> Dict:
 
