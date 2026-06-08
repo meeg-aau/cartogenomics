@@ -1,7 +1,7 @@
 """
 RO-Crate builder for Cartogenomics.
 
-Entry point: build_crate()
+Entry point: build_crate() — convenience wrapper around CrateBuilder.
 
 Provenance model
 ----------------
@@ -27,206 +27,178 @@ Entity graph per export
 
 Samples and Genomes are independent entities — Genome has no FK to Sample.
 The link will come via the Parquet presence/absence matrix once implemented.
-
-Usage
------
-    from rocrates.builder import build_crate
-
-    crate = build_crate(source_dataset="MFD", release_label="1.0")
-    crate = build_crate(include_genomes=True, genome_release_label="1.0",
-                        min_completeness=90.0)
-
-    import tempfile, zipfile, os
-    with tempfile.TemporaryDirectory() as tmpdir:
-        crate.write(tmpdir)
-        with zipfile.ZipFile("export.zip", "w", zipfile.ZIP_DEFLATED) as zf:
-            for root, _, files in os.walk(tmpdir):
-                for f in files:
-                    abs_path = os.path.join(root, f)
-                    zf.write(abs_path, os.path.relpath(abs_path, tmpdir))
 """
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import date, datetime, timezone
 
+import duckdb
+from django.conf import settings
 from rocrate.rocrate import ROCrate
 from rocrate.model.contextentity import ContextEntity
 
+from versions.models import CartogenomicsRelease
+from samples.models import Sample
+from genomes.models import Genome
+from runs.models import Run
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
-def build_crate(
-    *,
-    label: str | None = None,
+def build_crate(**kwargs) -> ROCrate:
+    return CrateBuilder(**kwargs).build()
 
-    # --- Sample selection ---
-    sample_queryset=None,
-    include_samples: bool = True,
-    source_dataset: str | None = None,
-    ontology: str | None = None,
-    lat_min: float | None = None,
-    lat_max: float | None = None,
-    lon_min: float | None = None,
-    lon_max: float | None = None,
-    release_label: str | None = None,
-    include_runs: bool = True,
 
-    # --- Genome selection ---
-    genome_queryset=None,
-    include_genomes: bool = False,
-    genome_release_label: str | None = None,
-    min_completeness: float | None = None,
-    max_contamination: float | None = None,
+class CrateBuilder:
 
-    # --- Abundance cross-filter ---
-    # direction="samples_to_genomes": keep all filtered samples, select genomes detected in them
-    # direction="genomes_to_samples": keep all filtered genomes, select samples containing them
-    link_via_abundance: bool = False,
-    min_abundance: float = 0.0,
-    abundance_direction: str = "samples_to_genomes",
-) -> ROCrate:
-    """
-    Build and return an ROCrate.
+    def __init__(
+        self,
+        *,
+        label: str | None = None,
 
-    All versioning information (ingest dates, pipelines, upstream versions,
-    release metadata) is pulled from the DB and embedded as provenance
-    entities in the crate graph.
-    """
-    from samples.models import Sample
-    from genomes.models import Genome
+        # --- Sample selection ---
+        sample_queryset = None,
+        include_samples: bool = True,
+        source_dataset: str | None = None,
+        ontology: str | None = None,
+        lat_min: float | None = None,
+        lat_max: float | None = None,
+        lon_min: float | None = None,
+        lon_max: float | None = None,
+        release_label: str | None = None,
+        include_runs: bool = True,
 
-    samples = []
-    genomes = []
+        # --- Genome selection ---
+        genome_queryset = None,
+        include_genomes: bool = False,
+        genome_release_label: str | None = None,
+        min_completeness: float | None = None,
+        max_contamination: float | None = None,
 
-    if include_samples:
-        if sample_queryset is None:
-            sample_queryset = _apply_sample_filters(
-                Sample.objects.all(),
-                source_dataset=source_dataset,
-                ontology=ontology,
-                lat_min=lat_min, lat_max=lat_max,
-                lon_min=lon_min, lon_max=lon_max,
-                release_label=release_label,
+        # --- Abundance cross-filter ---
+        # Keep all filtered samples; include genomes detected in them.
+        link_via_abundance: bool = False,
+        min_abundance: float = 0.0,
+    ):
+        self.label = label
+        self.sample_queryset = sample_queryset
+        self.include_samples = include_samples
+        self.source_dataset = source_dataset
+        self.ontology = ontology
+        self.lat_min = lat_min
+        self.lat_max = lat_max
+        self.lon_min = lon_min
+        self.lon_max = lon_max
+        self.release_label = release_label
+        self.include_runs = include_runs
+        self.genome_queryset = genome_queryset
+        self.include_genomes = include_genomes
+        self.genome_release_label = genome_release_label
+        self.min_completeness = min_completeness
+        self.max_contamination = max_contamination
+        self.link_via_abundance = link_via_abundance
+        self.min_abundance = min_abundance
+
+        self.crate: ROCrate | None = None
+        self.samples: list = []
+        self.genomes: list = []
+
+    def build(self) -> ROCrate:
+        self._resolve_querysets() # query DB, populate samples and genomes
+        self.crate = ROCrate() #    create an empty crate
+        self._add_cartogenomics_db_entity()
+        self._add_export_action() # set a timestamp for export
+        self._set_root_metadata()
+        #   loop to add sample and run
+        for sample in self.samples:
+            self._ensure_ingest_entities(sample.ingest)
+            self._add_sample(sample)
+            if self.include_runs:
+                for run in sample.runs.all():
+                    self._ensure_ingest_entities(run.ingest)
+                    self._add_run(run, sample)
+        #   loop to add genomes
+        for genome in self.genomes:
+            self._ensure_ingest_entities(genome.ingest)
+            self._add_genome(genome)
+        return self.crate
+
+    #   query DB with filters
+    def _resolve_querysets(self):
+        if self.include_samples:
+            if self.sample_queryset is None:
+                self.sample_queryset = self._apply_sample_filters(Sample.objects.all())
+
+        if self.include_genomes:
+            if self.genome_queryset is None:
+                self.genome_queryset = self._apply_genome_filters(Genome.objects.all())
+
+        if self.link_via_abundance and self.include_samples and self.include_genomes:
+            self.sample_queryset, self.genome_queryset = self._cross_filter_via_abundance()
+
+        if self.include_samples:
+            self.sample_queryset = self.sample_queryset.select_related("ingest__release").prefetch_related(
+                "external_resources",
+                "runs__external_resources",
+                "runs__ingest",
             )
+            self.samples = list(self.sample_queryset)
 
-    if include_genomes:
-        if genome_queryset is None:
-            genome_queryset = _apply_genome_filters(
-                Genome.objects.all(),
-                release_label=genome_release_label,
-                min_completeness=min_completeness,
-                max_contamination=max_contamination,
+        if self.include_genomes:
+            self.genome_queryset = self.genome_queryset.select_related("ingest__release").prefetch_related(
+                "external_resources",
             )
+            self.genomes = list(self.genome_queryset)
 
-    if link_via_abundance and include_samples and include_genomes:
-        sample_queryset, genome_queryset = _cross_filter_via_abundance(
-            sample_queryset, genome_queryset,
-            min_abundance=min_abundance,
-            direction=abundance_direction,
-        )
+    def _apply_sample_filters(self, qs):
+        if self.source_dataset:
+            qs = qs.filter(source_dataset=self.source_dataset)
+        if self.ontology:
+            qs = qs.filter(ontology__icontains=self.ontology)
+        if self.lat_min is not None:
+            qs = qs.filter(latitude__gte=self.lat_min)
+        if self.lat_max is not None:
+            qs = qs.filter(latitude__lte=self.lat_max)
+        if self.lon_min is not None:
+            qs = qs.filter(longitude__gte=self.lon_min)
+        if self.lon_max is not None:
+            qs = qs.filter(longitude__lte=self.lon_max)
+        if self.release_label:
+            qs = qs.filter(ingest__release__label=self.release_label)
+        return qs
 
-    if include_samples:
-        sample_queryset = sample_queryset.select_related("ingest__release").prefetch_related(
-            "external_resources",
-            "runs__external_resources",
-            "runs__ingest",
-        )
-        samples = list(sample_queryset)
+    def _apply_genome_filters(self, qs):
+        if self.genome_release_label:
+            qs = qs.filter(ingest__release__label=self.genome_release_label)
+        if self.min_completeness is not None:
+            qs = qs.filter(completeness__gte=self.min_completeness)
+        if self.max_contamination is not None:
+            qs = qs.filter(contamination__lte=self.max_contamination)
+        return qs
 
-    if include_genomes:
-        genome_queryset = genome_queryset.select_related("ingest__release").prefetch_related(
-            "external_resources",
-        )
-        genomes = list(genome_queryset)
+    def _cross_filter_via_abundance(self):
+        abundance_file = getattr(settings, "ABUNDANCE_FILE", None)
+        if not abundance_file or not os.path.exists(abundance_file):
+            logger.warning("No abundance file found at %s; skipping cross-filtering", abundance_file)
+            return self.sample_queryset, self.genome_queryset
 
-    crate = ROCrate()
+        con = duckdb.connect()
+        parquet_cols = {row[0] for row in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
+        ).fetchall()}
 
-    # Always present: the DB itself and the export action
-    _add_cartogenomics_db_entity(crate)
-    _add_export_action(crate, label=label, sample_count=len(samples), genome_count=len(genomes))
-
-    _set_root_metadata(
-        crate,
-        label=label,
-        source_dataset=source_dataset,
-        ontology=ontology,
-        lat_min=lat_min, lat_max=lat_max,
-        lon_min=lon_min, lon_max=lon_max,
-        release_label=release_label,
-        genome_release_label=genome_release_label,
-        sample_count=len(samples),
-        genome_count=len(genomes),
-        include_samples=include_samples,
-        include_runs=include_runs,
-        include_genomes=include_genomes,
-        min_completeness=min_completeness,
-        max_contamination=max_contamination,
-        link_via_abundance=link_via_abundance,
-        min_abundance=min_abundance,
-        abundance_direction=abundance_direction,
-    )
-
-    for sample in samples:
-        _ensure_ingest_entities(crate, sample.ingest)
-        _add_sample(crate, sample)
-        if include_runs:
-            for run in sample.runs.all():
-                _ensure_ingest_entities(crate, run.ingest)
-                _add_run(crate, run, sample)
-
-    for genome in genomes:
-        _ensure_ingest_entities(crate, genome.ingest)
-        _add_genome(crate, genome)
-
-    return crate
-
-
-# ---------------------------------------------------------------------------
-# Abundance cross-filter
-# ---------------------------------------------------------------------------
-
-def _cross_filter_via_abundance(
-    sample_qs, genome_qs, *, min_abundance: float = 0.0, direction: str = "samples_to_genomes"
-):
-    """
-    Cross-filter samples and genomes using the abundance Parquet file.
-
-    direction="samples_to_genomes":
-        Keep all filtered samples unchanged.
-        Select only genomes detected (>= min_abundance) in those samples' runs.
-
-    direction="genomes_to_samples":
-        Keep all filtered genomes unchanged.
-        Select only samples whose runs contain those genomes (>= min_abundance).
-    """
-    import os
-    import duckdb
-    from django.conf import settings
-    from runs.models import Run
-
-    abundance_file = getattr(settings, "ABUNDANCE_FILE", None)
-    if not abundance_file or not os.path.exists(abundance_file):
-        return sample_qs, genome_qs
-
-    con = duckdb.connect()
-    parquet_cols = {row[0] for row in con.execute(
-        f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
-    ).fetchall()}
-
-    if direction == "samples_to_genomes":
-        # Anchor: samples. Derive: which genomes are detected in their runs?
         run_accessions = list(
-            Run.objects.filter(sample__in=sample_qs).values_list("accession", flat=True)
+            Run.objects.filter(sample__in=self.sample_queryset).values_list("accession", flat=True)
         )
         matching_runs = [r for r in run_accessions if r in parquet_cols]
         if not matching_runs:
             con.close()
-            return sample_qs, genome_qs.none()
+            logger.warning("No matching runs found in %s for %d samples", abundance_file, self.sample_queryset.count())
+            return self.sample_queryset, self.genome_queryset.none()
 
-        genome_accessions = list(genome_qs.values_list("accession", flat=True))
+        genome_accessions = list(self.genome_queryset.values_list("accession", flat=True))
         col_select = ", ".join(f'"{r}"' for r in matching_runs)
         genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
 
@@ -242,387 +214,290 @@ def _cross_filter_via_abundance(
             )
             SELECT array_agg(DISTINCT genome_id)
             FROM long
-            WHERE abundance > {min_abundance}
+            WHERE abundance > {self.min_abundance}
         """).fetchone()
         con.close()
 
-        present_genomes = result[0] if result and result[0] else []
-        # Samples are unchanged — only genomes are narrowed
-        return sample_qs, genome_qs.filter(accession__in=present_genomes)
+        present_genomes = result[0] if result else []
+        return self.sample_queryset, self.genome_queryset.filter(accession__in=present_genomes)
 
-    else:  # genomes_to_samples
-        # Anchor: genomes. Derive: which samples have those genomes in their runs?
-        genome_accessions = list(genome_qs.values_list("accession", flat=True))
-        all_run_accessions = list(
-            Run.objects.filter(sample__in=sample_qs).values_list("accession", flat=True)
+    # -----------------------------------------------------------------------
+    # Root dataset + export action
+    # -----------------------------------------------------------------------
+
+    def _set_root_metadata(self):
+        parts = []
+        if self.source_dataset:
+            parts.append(self.source_dataset)
+        if self.ontology:
+            parts.append(self.ontology)
+        if any(v is not None for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]):
+            parts.append(f"bbox({self.lat_min},{self.lat_max},{self.lon_min},{self.lon_max})")
+        if self.release_label:
+            parts.append(f"release:{self.release_label}")
+
+        crate_label = self.label or (
+            "Cartogenomics export — " + " | ".join(parts) if parts else "Cartogenomics export"
         )
-        matching_runs = [r for r in all_run_accessions if r in parquet_cols]
-        if not matching_runs or not genome_accessions:
-            con.close()
-            return sample_qs.none(), genome_qs
 
-        col_select = ", ".join(f'"{r}"' for r in matching_runs)
-        genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
+        description_parts = []
+        if self.samples:
+            description_parts.append(f"{len(self.samples)} samples")
+        if self.genomes:
+            description_parts.append(f"{len(self.genomes)} genomes")
 
-        result = con.execute(f"""
-            WITH long AS (
-                UNPIVOT (
-                    SELECT genome_id, {col_select}
-                    FROM read_parquet('{abundance_file}')
-                    WHERE genome_id IN ({genome_list})
-                )
-                ON COLUMNS(* EXCLUDE genome_id)
-                INTO NAME run_id VALUE abundance
-            )
-            SELECT array_agg(DISTINCT run_id)
-            FROM long
-            WHERE abundance > {min_abundance}
-        """).fetchone()
-        con.close()
+        self.crate.root_dataset["name"] = crate_label
+        self.crate.root_dataset["datePublished"] = str(date.today())
+        self.crate.root_dataset["description"] = (
+            (", ".join(description_parts) + f" exported from Cartogenomics DB on {date.today()}.")
+            if description_parts else f"Cartogenomics export — {date.today()}"
+        )
+        self.crate.root_dataset["keywords"] = [
+            p for p in [self.source_dataset, self.ontology, self.release_label, self.genome_release_label] if p
+        ]
+        self.crate.root_dataset["wasGeneratedBy"] = {"@id": "#export"}
 
-        present_runs = result[0] if result and result[0] else []
-        # Genomes are unchanged — only samples are narrowed
-        return sample_qs.filter(runs__accession__in=present_runs).distinct(), genome_qs
+        if any(v is not None for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]):
+            self.crate.root_dataset["spatialCoverage"] = {
+                "@id": "#spatial-coverage",
+                "@type": "Place",
+                "geo": {
+                    "@id": "#spatial-coverage-geo",
+                    "@type": "GeoShape",
+                    "box": f"{self.lat_min} {self.lon_min} {self.lat_max} {self.lon_max}",
+                },
+            }
 
+        filters = {
+            "@id": "#export-filters",
+            "includeSamples": self.include_samples,
+            "includeGenomes": self.include_genomes,
+        }
+        if self.include_samples:
+            if self.source_dataset:        filters["sourceDataset"]  = self.source_dataset
+            if self.ontology:              filters["ontology"]       = self.ontology
+            if self.lat_min is not None:   filters["latMin"]         = self.lat_min
+            if self.lat_max is not None:   filters["latMax"]         = self.lat_max
+            if self.lon_min is not None:   filters["lonMin"]         = self.lon_min
+            if self.lon_max is not None:   filters["lonMax"]         = self.lon_max
+            if self.release_label:         filters["releaseLabel"]   = self.release_label
+            filters["includeRuns"] = self.include_runs
+        if self.include_genomes:
+            if self.genome_release_label:          filters["genomeReleaseLabel"] = self.genome_release_label
+            if self.min_completeness is not None:  filters["minCompleteness"]   = self.min_completeness
+            if self.max_contamination is not None: filters["maxContamination"]  = self.max_contamination
+        if self.link_via_abundance:
+            filters["linkViaAbundance"] = True
+            filters["minAbundance"]     = self.min_abundance
+        self.crate.root_dataset["exportFilters"] = filters
 
-# ---------------------------------------------------------------------------
-# Filter helpers
-# ---------------------------------------------------------------------------
+        effective_release = self.release_label or self.genome_release_label
+        if effective_release:
+            self._ensure_release_entity(effective_release)
+            self.crate.root_dataset["isPartOf"] = {"@id": f"#release-{effective_release}"}
 
-def _apply_sample_filters(qs, *, source_dataset, ontology, lat_min, lat_max, lon_min, lon_max, release_label):
-    if source_dataset:
-        qs = qs.filter(source_dataset=source_dataset)
-    if ontology:
-        qs = qs.filter(ontology__icontains=ontology)
-    if lat_min is not None:
-        qs = qs.filter(latitude__gte=lat_min)
-    if lat_max is not None:
-        qs = qs.filter(latitude__lte=lat_max)
-    if lon_min is not None:
-        qs = qs.filter(longitude__gte=lon_min)
-    if lon_max is not None:
-        qs = qs.filter(longitude__lte=lon_max)
-    if release_label:
-        qs = qs.filter(ingest__release__label=release_label)
-    return qs
+    def _add_cartogenomics_db_entity(self):
+        self.crate.add(ContextEntity(self.crate, "#cartogenomics-db", properties={
+            "@type": "SoftwareApplication",
+            "name": "Cartogenomics DB",
+            "url": "https://github.com/meeg-aau/cartogenomics",
+        }))
 
+    def _add_export_action(self):
+        description_parts = []
+        if self.samples:
+            description_parts.append(f"{len(self.samples)} samples")
+        if self.genomes:
+            description_parts.append(f"{len(self.genomes)} genomes")
 
-def _apply_genome_filters(qs, *, release_label, min_completeness, max_contamination):
-    if release_label:
-        qs = qs.filter(ingest__release__label=release_label)
-    if min_completeness is not None:
-        qs = qs.filter(completeness__gte=min_completeness)
-    if max_contamination is not None:
-        qs = qs.filter(contamination__lte=max_contamination)
-    return qs
+        self.crate.add(ContextEntity(self.crate, "#export", properties={
+            "@type": "CreateAction",
+            "name": "Cartogenomics RO-Crate export",
+            "description": ("Export of " + ", ".join(description_parts)) if description_parts else "Cartogenomics export",
+            "endTime": _fmt_date(datetime.now(timezone.utc)),
+            "instrument": {"@id": "#cartogenomics-db"},
+            "result": {"@id": "./"},
+        }))
 
+    # -----------------------------------------------------------------------
+    # Provenance entities
+    # -----------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Root dataset + export action
-# ---------------------------------------------------------------------------
+    @staticmethod
+    def _ingest_entity_id(ingest) -> str:
+        slug = f"{ingest.source_system}-{ingest.data_type}-{ingest.label}".lower().replace(" ", "-")
+        return f"#ingest-{slug}"
 
-def _set_root_metadata(
-    crate, *, label, source_dataset, ontology,
-    lat_min, lat_max, lon_min, lon_max,
-    release_label, genome_release_label,
-    sample_count, genome_count,
-    include_samples=True, include_runs=True, include_genomes=False,
-    min_completeness=None, max_contamination=None,
-    link_via_abundance=False, min_abundance=0.0, abundance_direction="samples_to_genomes",
-):
-    parts = []
-    if source_dataset:
-        parts.append(source_dataset)
-    if ontology:
-        parts.append(ontology)
-    if any(v is not None for v in [lat_min, lat_max, lon_min, lon_max]):
-        parts.append(f"bbox({lat_min},{lat_max},{lon_min},{lon_max})")
-    if release_label:
-        parts.append(f"release:{release_label}")
+    @staticmethod
+    def _pipeline_entity_id(pipeline_version: str) -> str:
+        return f"#pipeline-{pipeline_version.lower().replace(' ', '-')}"
 
-    crate_label = label or (
-        "Cartogenomics export — " + " | ".join(parts) if parts else "Cartogenomics export"
-    )
+    def _ensure_ingest_entities(self, ingest) -> None:
+        ingest_id = self._ingest_entity_id(ingest)
+        if self.crate.get(ingest_id):
+            return
 
-    description_parts = []
-    if sample_count:
-        description_parts.append(f"{sample_count} samples")
-    if genome_count:
-        description_parts.append(f"{genome_count} genomes")
+        properties = {"@type": "CreateAction",
+                      "name": f"{ingest.source_system} {ingest.data_type.lower().replace('_', ' ')} ingest",
+                      "description": ingest.label, "object": {"@id": ingest.source_system},
+                      "endTime": _fmt_date(ingest.ingested_on)}
 
-    crate.root_dataset["name"] = crate_label
-    crate.root_dataset["datePublished"] = str(date.today())
-    crate.root_dataset["description"] = (
-        (", ".join(description_parts) + f" exported from Cartogenomics DB on {date.today()}.")
-        if description_parts else f"Cartogenomics export — {date.today()}"
-    )
-    crate.root_dataset["keywords"] = [
-        p for p in [source_dataset, ontology, release_label, genome_release_label] if p
-    ]
-    crate.root_dataset["wasGeneratedBy"] = {"@id": "#export"}
+        if ingest.upstream_version:
+            properties["version"] = ingest.upstream_version
+        if ingest.notes:
+            properties["description"] = f"{ingest.label} — {ingest.notes}"
 
-    if any(v is not None for v in [lat_min, lat_max, lon_min, lon_max]):
-        crate.root_dataset["spatialCoverage"] = {
-            "@id": "#spatial-coverage",
-            "@type": "Place",
-            "geo": {
-                "@id": "#spatial-coverage-geo",
-                "@type": "GeoShape",
-                "box": f"{lat_min} {lon_min} {lat_max} {lon_max}",
-            },
+        if ingest.pipeline_version:
+            self._ensure_pipeline_entity(ingest.pipeline_version)
+            properties["instrument"] = {"@id": self._pipeline_entity_id(ingest.pipeline_version)}
+
+        if ingest.release:
+            self._ensure_release_entity(ingest.release.label, release_obj=ingest.release)
+            properties["isPartOf"] = {"@id": f"#release-{ingest.release.label}"}
+
+        self.crate.add(ContextEntity(self.crate, ingest_id, properties=properties))
+
+    def _ensure_pipeline_entity(self, pipeline_version: str) -> None:
+        pipeline_id = self._pipeline_entity_id(pipeline_version)
+        if self.crate.get(pipeline_id):
+            return
+
+        parts = pipeline_version.rsplit(" ", 1)
+        name = parts[0] if len(parts) == 2 else pipeline_version
+        version = parts[1] if len(parts) == 2 else None
+
+        self.crate.add(ContextEntity(self.crate, pipeline_id, properties={
+            "@type": "SoftwareApplication",
+            "name": name,
+            "softwareVersion": version or pipeline_version,
+        }))
+
+    def _ensure_release_entity(self, release_label: str, release_obj=None) -> None:
+        release_id = f"#release-{release_label}"
+        if self.crate.get(release_id):
+            return
+
+        properties = {
+            "@type": "schema:Dataset",
+            "name": release_label,
         }
 
-    # Store all active filters for the HTML preview
-    filters = {"@id": "#export-filters", "includeSamples": include_samples, "includeGenomes": include_genomes}
-    if include_samples:
-        if source_dataset:     filters["sourceDataset"]   = source_dataset
-        if ontology:           filters["ontology"]        = ontology
-        if lat_min is not None: filters["latMin"]         = lat_min
-        if lat_max is not None: filters["latMax"]         = lat_max
-        if lon_min is not None: filters["lonMin"]         = lon_min
-        if lon_max is not None: filters["lonMax"]         = lon_max
-        if release_label:      filters["releaseLabel"]    = release_label
-        filters["includeRuns"] = include_runs
-    if include_genomes:
-        if genome_release_label:    filters["genomeReleaseLabel"] = genome_release_label
-        if min_completeness is not None: filters["minCompleteness"]  = min_completeness
-        if max_contamination is not None: filters["maxContamination"] = max_contamination
-    if link_via_abundance:
-        filters["linkViaAbundance"]  = True
-        filters["minAbundance"]      = min_abundance
-        filters["abundanceDirection"] = abundance_direction
-    crate.root_dataset["exportFilters"] = filters
+        if release_obj is None:
+            try:
+                release_obj = CartogenomicsRelease.objects.get(label=release_label)
+            except Exception:
+                pass
 
-    # Link to the release entity if it exists in the DB
-    effective_release = release_label or genome_release_label
-    if effective_release:
-        _ensure_release_entity(crate, effective_release)
-        crate.root_dataset["isPartOf"] = {"@id": f"#release-{effective_release}"}
+        if release_obj:
+            properties["dateCreated"] = _fmt_date(release_obj.created_at)
+            if release_obj.notes:
+                properties["description"] = release_obj.notes
 
+        self.crate.add(ContextEntity(self.crate, release_id, properties=properties))
 
-def _add_cartogenomics_db_entity(crate: ROCrate) -> None:
-    crate.add(ContextEntity(crate, "#cartogenomics-db", properties={
-        "@type": "SoftwareApplication",
-        "name": "Cartogenomics DB",
-        "url": "https://github.com/meeg-aau/cartogenomics",
-    }))
+    # -----------------------------------------------------------------------
+    # Entity builders
+    # -----------------------------------------------------------------------
 
+    def _add_sample(self, sample) -> None:
+        identifier = sample.biosample or sample.ena_sample or str(sample.pk)
+        entity_id = f"#sample-{identifier}"
 
-def _add_export_action(crate: ROCrate, *, label: str | None, sample_count: int, genome_count: int) -> None:
-    description_parts = []
-    if sample_count:
-        description_parts.append(f"{sample_count} samples")
-    if genome_count:
-        description_parts.append(f"{genome_count} genomes")
+        properties = {
+            "@type": "schema:BioSample",
+            "name": identifier,
+            "identifier": [v for v in [sample.biosample, sample.ena_sample] if v],
+            "dateCreated": _fmt_date(sample.created_at),
+            "dateModified": _fmt_date(sample.updated_at),
+            "wasGeneratedBy": {"@id": self._ingest_entity_id(sample.ingest)},
+        }
+        if sample.source_dataset:
+            properties["isPartOf"] = sample.source_dataset
+        if sample.ontology:
+            properties["environmentType"] = sample.ontology
+        if sample.latitude is not None:
+            properties["latitude"] = sample.latitude
+        if sample.longitude is not None:
+            properties["longitude"] = sample.longitude
+        if sample.region:
+            properties["addressRegion"] = sample.region
+        if sample.locality:
+            properties["addressLocality"] = sample.locality
 
-    crate.add(ContextEntity(crate, "#export", properties={
-        "@type": "CreateAction",
-        "name": "Cartogenomics RO-Crate export",
-        "description": ("Export of " + ", ".join(description_parts)) if description_parts else "Cartogenomics export",
-        "endTime": _fmt_date(datetime.now(timezone.utc)),
-        "instrument": {"@id": "#cartogenomics-db"},
-        "result": {"@id": "./"},
-    }))
+        self.crate.add(ContextEntity(self.crate, entity_id, properties=properties))
 
+        for ext in sample.external_resources.all():
+            self._add_external_file(ext)
 
-# ---------------------------------------------------------------------------
-# Provenance entities (IngestVersion, pipeline, release)
-# ---------------------------------------------------------------------------
+    def _add_run(self, run, sample) -> None:
+        entity_id = f"#run-{run.accession}"
+        sample_id = sample.biosample or sample.ena_sample or str(sample.pk)
 
-def _ingest_entity_id(ingest) -> str:
-    slug = f"{ingest.source_system}-{ingest.data_type}-{ingest.label}".lower().replace(" ", "-")
-    return f"#ingest-{slug}"
+        properties = {
+            "@type": "schema:Dataset",
+            "name": run.accession,
+            "identifier": run.accession,
+            "sample": {"@id": f"#sample-{sample_id}"},
+            "dateCreated": _fmt_date(run.created_at),
+            "wasGeneratedBy": {"@id": self._ingest_entity_id(run.ingest)},
+        }
+        if run.sequencer:
+            properties["instrument"] = run.sequencer
+        if run.read_count is not None:
+            properties["contentSize"] = run.read_count
 
+        self.crate.add(ContextEntity(self.crate, entity_id, properties=properties))
 
-def _pipeline_entity_id(pipeline_version: str) -> str:
-    return f"#pipeline-{pipeline_version.lower().replace(' ', '-')}"
+        for ext in run.external_resources.all():
+            self._add_external_file(ext)
 
+    def _add_genome(self, genome) -> None:
+        entity_id = f"#genome-{genome.accession}"
 
-def _ensure_ingest_entities(crate: ROCrate, ingest) -> None:
-    """Add a CreateAction for the IngestVersion and its SoftwareApplication, if not already present."""
-    ingest_id = _ingest_entity_id(ingest)
-    if crate.get(ingest_id):
-        return
+        properties = {
+            "@type": ["schema:Dataset", "schema:Gene"],
+            "name": genome.accession,
+            "identifier": genome.accession,
+            "dateCreated": _fmt_date(genome.created_at),
+            "wasGeneratedBy": {"@id": self._ingest_entity_id(genome.ingest)},
+        }
+        if genome.taxonomy:
+            properties["taxonomicRange"] = genome.taxonomy
+        if genome.completeness is not None:
+            properties["completeness"] = genome.completeness
+        if genome.contamination is not None:
+            properties["contamination"] = genome.contamination
+        if genome.completeness_software:
+            properties["measurementTechnique"] = genome.completeness_software
+        if genome.genome_size is not None:
+            properties["contentSize"] = genome.genome_size
+        if genome.n50 is not None:
+            properties["n50"] = genome.n50
 
-    properties = {
-        "@type": "CreateAction",
-        "name": f"{ingest.source_system} {ingest.data_type.lower().replace('_', ' ')} ingest",
-        "description": ingest.label,
-        "object": {"@id": ingest.source_system},  # points at the source system entity
-    }
+        self.crate.add(ContextEntity(self.crate, entity_id, properties=properties))
 
-    properties["endTime"] = _fmt_date(ingest.created_at)
-    if ingest.last_modified_internal:
-        properties["startTime"] = _fmt_date(ingest.last_modified_internal)
-    if ingest.upstream_version:
-        properties["version"] = ingest.upstream_version
-    if ingest.notes:
-        properties["description"] = f"{ingest.label} — {ingest.notes}"
+        for ext in genome.external_resources.all():
+            self._add_external_file(ext)
 
-    # Link to the pipeline that ran this ingest
-    if ingest.pipeline_version:
-        _ensure_pipeline_entity(crate, ingest.pipeline_version)
-        properties["instrument"] = {"@id": _pipeline_entity_id(ingest.pipeline_version)}
+    def _add_external_file(self, ext) -> None:
+        if ext.url.lower().endswith(".parquet"):
+            return
 
-    # Link to the release this ingest belongs to
-    if ingest.release:
-        _ensure_release_entity(crate, ingest.release.label, release_obj=ingest.release)
-        properties["isPartOf"] = {"@id": f"#release-{ingest.release.label}"}
+        media_type = _guess_media_type(ext.url)
+        props = {
+            "name": ext.url.split("/")[-1],
+            "contentUrl": ext.url,
+        }
+        if media_type:
+            props["encodingFormat"] = media_type
+        if ext.source_system:
+            props["publisher"] = ext.source_system
+        if ext.first_created_external:
+            props["dateCreated"] = _fmt_date(ext.first_created_external)
+        if ext.last_modified_external:
+            props["dateModified"] = _fmt_date(ext.last_modified_external)
 
-    crate.add(ContextEntity(crate, ingest_id, properties=properties))
-
-
-def _ensure_pipeline_entity(crate: ROCrate, pipeline_version: str) -> None:
-    pipeline_id = _pipeline_entity_id(pipeline_version)
-    if crate.get(pipeline_id):
-        return
-
-    # Try to split "tool_name version_string" on the last space
-    parts = pipeline_version.rsplit(" ", 1)
-    name = parts[0] if len(parts) == 2 else pipeline_version
-    version = parts[1] if len(parts) == 2 else None
-
-    properties = {
-        "@type": "SoftwareApplication",
-        "name": name,
-        "softwareVersion": version or pipeline_version,
-    }
-    crate.add(ContextEntity(crate, pipeline_id, properties=properties))
-
-
-def _ensure_release_entity(crate: ROCrate, release_label: str, release_obj=None) -> None:
-    release_id = f"#release-{release_label}"
-    if crate.get(release_id):
-        return
-
-    properties = {
-        "@type": "schema:Dataset",
-        "name": release_label,
-    }
-
-    if release_obj is None:
-        # Lazy-load from DB if only the label was given
-        try:
-            from versions.models import CartogenomicsRelease
-            release_obj = CartogenomicsRelease.objects.get(label=release_label)
-        except Exception:
-            pass
-
-    if release_obj:
-        properties["dateCreated"] = _fmt_date(release_obj.created_at)
-        if release_obj.notes:
-            properties["description"] = release_obj.notes
-
-    crate.add(ContextEntity(crate, release_id, properties=properties))
-
-
-# ---------------------------------------------------------------------------
-# Entity builders
-# ---------------------------------------------------------------------------
-
-def _add_sample(crate: ROCrate, sample) -> None:
-    identifier = sample.biosample or sample.ena_sample or str(sample.pk)
-    entity_id = f"#sample-{identifier}"
-
-    properties = {
-        "@type": ["schema:BioSample", "Thing"],
-        "name": identifier,
-        "identifier": [v for v in [sample.biosample, sample.ena_sample] if v],
-        "dateCreated": _fmt_date(sample.created_at),
-        "dateModified": _fmt_date(sample.updated_at),
-        "wasGeneratedBy": {"@id": _ingest_entity_id(sample.ingest)},
-    }
-    if sample.source_dataset:
-        properties["isPartOf"] = sample.source_dataset
-    if sample.ontology:
-        properties["environmentType"] = sample.ontology
-    if sample.latitude is not None:
-        properties["latitude"] = sample.latitude
-    if sample.longitude is not None:
-        properties["longitude"] = sample.longitude
-    if sample.region:
-        properties["addressRegion"] = sample.region
-    if sample.locality:
-        properties["addressLocality"] = sample.locality
-
-    crate.add(ContextEntity(crate, entity_id, properties=properties))
-
-    for ext in sample.external_resources.all():
-        _add_external_file(crate, ext)
-
-
-def _add_run(crate: ROCrate, run, sample) -> None:
-    entity_id = f"#run-{run.accession}"
-    sample_id = sample.biosample or sample.ena_sample or str(sample.pk)
-
-    properties = {
-        "@type": "schema:Dataset",
-        "name": run.accession,
-        "identifier": run.accession,
-        "sample": {"@id": f"#sample-{sample_id}"},
-        "dateCreated": _fmt_date(run.created_at),
-        "wasGeneratedBy": {"@id": _ingest_entity_id(run.ingest)},
-    }
-    if run.sequencer:
-        properties["instrument"] = run.sequencer
-    if run.read_count is not None:
-        properties["contentSize"] = run.read_count
-
-    crate.add(ContextEntity(crate, entity_id, properties=properties))
-
-    for ext in run.external_resources.all():
-        _add_external_file(crate, ext)
-
-
-def _add_genome(crate: ROCrate, genome) -> None:
-    entity_id = f"#genome-{genome.accession}"
-
-    properties = {
-        "@type": ["schema:Dataset", "schema:Gene"],
-        "name": genome.accession,
-        "identifier": genome.accession,
-        "dateCreated": _fmt_date(genome.created_at),
-        "wasGeneratedBy": {"@id": _ingest_entity_id(genome.ingest)},
-    }
-    if genome.taxonomy:
-        properties["taxonomicRange"] = genome.taxonomy
-    if genome.completeness is not None:
-        properties["completeness"] = genome.completeness
-    if genome.contamination is not None:
-        properties["contamination"] = genome.contamination
-    if genome.completeness_software:
-        properties["measurementTechnique"] = genome.completeness_software
-    if genome.genome_size is not None:
-        properties["contentSize"] = genome.genome_size
-    if genome.n50 is not None:
-        properties["n50"] = genome.n50
-
-    crate.add(ContextEntity(crate, entity_id, properties=properties))
-
-    for ext in genome.external_resources.all():
-        _add_external_file(crate, ext)
-
-
-def _add_external_file(crate: ROCrate, ext) -> None:
-    if ext.url.lower().endswith(".parquet"):
-        return
-
-    media_type = _guess_media_type(ext.url)
-    props = {
-        "name": ext.url.split("/")[-1],
-        "contentUrl": ext.url,
-    }
-    if media_type:
-        props["encodingFormat"] = media_type
-    if ext.source_system:
-        props["publisher"] = ext.source_system
-    if ext.first_created_external:
-        props["dateCreated"] = _fmt_date(ext.first_created_external)
-    if ext.last_modified_external:
-        props["dateModified"] = _fmt_date(ext.last_modified_external)
-
-    # fetch_remote=False — URL reference only, no file content downloaded
-    crate.add_file(ext.url, fetch_remote=False, properties=props)
+        self.crate.add_file(ext.url, fetch_remote=False, properties=props)
 
 
 # ---------------------------------------------------------------------------

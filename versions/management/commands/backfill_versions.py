@@ -55,7 +55,7 @@ class Command(BaseCommand):
             to_create.append(SampleVersion(
                 sample=sample,
                 ingest=sample.ingest,
-                valid_from=sample.ingest.created_at,
+                valid_from=sample.ingest.ingested_on,
                 valid_to=None,
                 biosample=sample.biosample,
                 ena_sample=sample.ena_sample,
@@ -90,7 +90,7 @@ class Command(BaseCommand):
             to_create.append(GenomeVersion(
                 genome=genome,
                 ingest=genome.ingest,
-                valid_from=genome.ingest.created_at,
+                valid_from=genome.ingest.ingested_on,
                 valid_to=None,
                 completeness=genome.completeness,
                 contamination=genome.contamination,

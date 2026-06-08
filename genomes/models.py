@@ -26,6 +26,10 @@ class Genome(models.Model):
     n50 = models.BigIntegerField(null=True, blank=True)
 
     taxonomy = models.TextField(blank=True, default="")
+
+    archive_created = models.DateTimeField(null=True, blank=True)
+    archive_updated = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

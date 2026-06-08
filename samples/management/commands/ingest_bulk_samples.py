@@ -45,6 +45,7 @@ class Command(BaseCommand):
             "--continue-on-error",
             action="store_true",
             help="Continue processing even if one accession fails",
+            default=True,
         )
 
     def handle(self, *args, **options):

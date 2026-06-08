@@ -4,7 +4,7 @@ from .models import IngestVersion, CartogenomicsRelease
 
 @admin.register(IngestVersion)
 class IngestVersionAdmin(admin.ModelAdmin):
-    list_display = ("label", "source_system", "data_type", "created_at")
+    list_display = ("label", "source_system", "data_type", "ingested_on")
     search_fields = ("label", "notes")
 
 

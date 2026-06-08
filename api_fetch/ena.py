@@ -106,6 +106,7 @@ class ENAClient:
             "ena_sample": next((i for i in samples if i and i.startswith(("ERS", "SRS", "DRS"))), None),
             "first_created": record.get("first_created"),
             "last_updated": record.get("last_updated"),
+            "set_fasta_ftp": record.get("set_fasta_ftp"),
         }
 
 

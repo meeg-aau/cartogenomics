@@ -59,6 +59,9 @@ class Sample(models.Model):
 
     raw_metadata = models.JSONField(default=dict, blank=True)
 
+    archive_created = models.DateTimeField(null=True, blank=True)
+    archive_updated = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -71,7 +74,7 @@ class SampleVersion(models.Model):
 
     sample = models.ForeignKey(
         Sample,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="versions",
     )
     ingest = models.ForeignKey(

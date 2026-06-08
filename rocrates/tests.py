@@ -11,10 +11,6 @@ from versions.models import CartogenomicsRelease, IngestVersion
 class BuildCrateTest(TestCase):
     """Tests for rocrates.builder.build_crate()."""
 
-    # ------------------------------------------------------------------
-    # Fixtures
-    # ------------------------------------------------------------------
-
     def setUp(self):
         self.release = CartogenomicsRelease.objects.create(label="1.0")
 
@@ -53,8 +49,8 @@ class BuildCrateTest(TestCase):
             contamination=1.5,
             completeness_software=Genome.CompletenessSoftware.CHECKM2,
             taxonomy="d__Bacteria;p__Firmicutes",
-            genome_size=3_000_000,
-            n50=50_000,
+            genome_size=3000000,
+            n50=50000,
         )
         defaults.update(kwargs)
         return Genome.objects.create(**defaults)
@@ -64,7 +60,7 @@ class BuildCrateTest(TestCase):
             accession=accession,
             sample=sample,
             ingest=self.sample_ingest,
-            read_count=1_000_000,
+            read_count=1000000,
             sequencer="Illumina NovaSeq 6000",
         )
         defaults.update(kwargs)
@@ -81,9 +77,6 @@ class BuildCrateTest(TestCase):
             run=run,
         )
 
-    # ------------------------------------------------------------------
-    # Root dataset metadata
-    # ------------------------------------------------------------------
 
     def test_root_metadata_label_uses_filters(self):
         crate = build_crate(source_dataset="MFD", release_label="1.0")
@@ -365,15 +358,6 @@ class BuildCrateTest(TestCase):
         crate = build_crate()
         entity = crate.get("#ingest-biosamples-sample_metadata-test_sample_ingest")
         self.assertIn("endTime", entity)
-
-    def test_ingest_action_has_start_time_when_upstream_modified_set(self):
-        from django.utils import timezone as tz
-        self.sample_ingest.last_modified_internal = tz.now()
-        self.sample_ingest.save()
-        self._make_sample()
-        crate = build_crate()
-        entity = crate.get("#ingest-biosamples-sample_metadata-test_sample_ingest")
-        self.assertIn("startTime", entity)
 
     def test_pipeline_entity_created_when_pipeline_version_set(self):
         self.sample_ingest.pipeline_version = "sample_metadata_curation 0.1.0"

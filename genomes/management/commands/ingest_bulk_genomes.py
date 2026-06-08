@@ -40,6 +40,7 @@ class Command(BaseCommand):
             "--continue-on-error",
             action="store_true",
             help="Continue processing remaining accessions if one fails",
+            default=True,
         )
 
     def handle(self, *args, **options):

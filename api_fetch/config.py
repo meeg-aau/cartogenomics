@@ -33,7 +33,8 @@ class ENAConfig:
         "sample_accession",
         "secondary_sample_accession",
         "first_created",
-        "last_updated"
+        "last_updated",
+        "set_fasta_ftp",
     ]
     ACCESSION_PREFIXES = {
         "RR": "run",

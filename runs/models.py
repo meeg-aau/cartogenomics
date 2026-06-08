@@ -27,6 +27,8 @@ class Run(models.Model):
     library_source = models.CharField(max_length=100, null=True, blank=True)
     library_strategy = models.CharField(max_length=100, null=True, blank=True)
 
+    archive_created = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

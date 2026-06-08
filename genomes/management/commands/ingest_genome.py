@@ -8,6 +8,7 @@ from genomes.models import Genome, GenomeVersion
 from versions.models import IngestVersion, CartogenomicsRelease
 from external.models import ExternalResource
 
+from api_fetch import parse_iso_date
 from api_fetch.biosamples import get_basic_sample_data
 from api_fetch.ena import ENAClient
 from sample_metadata_curation.curate import curate_biosample
@@ -69,6 +70,7 @@ class Command(BaseCommand):
             ena_sample_acc = accs.get("ena_sample")
             ena_first_created_raw = accs.get("first_created")
             ena_last_updated_raw = accs.get("last_updated")
+
         except Exception as e:
             raise CommandError(f"Failed to get genome accessions for {accession}: {e}")
 
@@ -98,39 +100,9 @@ class Command(BaseCommand):
 
         release, _ = CartogenomicsRelease.objects.get_or_create(label=release_label)
 
-        upstream_last_modified = None
-        raw_update = raw.get("update")
-        if raw_update:
-            try:
-                dt = timezone.datetime.fromisoformat(raw_update.replace("Z", "+00:00"))
-                upstream_last_modified = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
-            except (ValueError, TypeError):
-                pass
-
-        biosample_first_created = None
-        raw_submitted = raw.get("submitted")
-        if raw_submitted:
-            try:
-                dt = timezone.datetime.fromisoformat(raw_submitted.replace("Z", "+00:00"))
-                biosample_first_created = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
-            except (ValueError, TypeError):
-                pass
-
-        ena_first_created = None
-        if ena_first_created_raw:
-            try:
-                dt = timezone.datetime.fromisoformat(ena_first_created_raw.replace("Z", "+00:00"))
-                ena_first_created = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
-            except (ValueError, TypeError):
-                pass
-
-        ena_last_updated = None
-        if ena_last_updated_raw:
-            try:
-                dt = timezone.datetime.fromisoformat(ena_last_updated_raw.replace("Z", "+00:00"))
-                ena_last_updated = dt if timezone.is_aware(dt) else timezone.make_aware(dt)
-            except (ValueError, TypeError):
-                pass
+        fasta_ftp_raw = accs.get("set_fasta_ftp")
+        ena_first_created = parse_iso_date(ena_first_created_raw)
+        ena_last_updated = parse_iso_date(ena_last_updated_raw)
 
         ingest, _ = IngestVersion.objects.update_or_create(
             source_system=IngestVersion.SourceSystem.ENA,
@@ -139,7 +111,6 @@ class Command(BaseCommand):
             defaults={
                 "pipeline_version": pipeline_version,
                 "release": release,
-                "last_modified_internal": upstream_last_modified,
             }
         )
 
@@ -147,6 +118,11 @@ class Command(BaseCommand):
             "completeness": completeness,
             "contamination": contamination,
             "completeness_software": software or "",
+        }
+
+        genome_archive = {
+            "archive_created": ena_first_created,
+            "archive_updated": ena_last_updated,
         }
 
         changed_fields = []
@@ -163,14 +139,14 @@ class Command(BaseCommand):
                 )
             else:
                 logger.info(
-                    f"Genome {genome_acc} already exists (id={existing.pk}) - no fields changed."
+                    f"Genome {genome_acc} already exists (id={existing.pk}) and no fields changed."
                 )
         except Genome.DoesNotExist:
             logger.info(f"Genome {genome_acc} not found in DB - will be created.")
 
         genome, created = Genome.objects.update_or_create(
             accession=genome_acc,
-            defaults={**curated_defaults, "ingest": ingest},
+            defaults={**curated_defaults, **genome_archive, "ingest": ingest},
         )
 
         now = timezone.now()
@@ -182,6 +158,8 @@ class Command(BaseCommand):
             "n50": genome.n50,
             "taxonomy": genome.taxonomy,
         }
+
+        #   grab current valid version, set end date to now, open new version from now to keep provenance
         if created:
             GenomeVersion.objects.create(
                 genome=genome,
@@ -200,19 +178,22 @@ class Command(BaseCommand):
                 **version_fields,
             )
 
-        ExternalResource.objects.update_or_create(
-            source_system=ExternalResource.SourceSystem.ENA,
-            accession=genome_acc,
-            ingest=ingest,
-            defaults={
-                "url": f"https://www.ebi.ac.uk/ena/browser/view/{genome_acc}",
-                "genome": genome,
-                "sample": None,
-                "run": None,
-                "first_created_external": ena_first_created,
-                "last_modified_external": ena_last_updated,
-            },
-        )
+        if fasta_ftp_raw:
+            fasta_url = f"https://{fasta_ftp_raw}" if not fasta_ftp_raw.startswith("http") else fasta_ftp_raw
+            fasta_filename = fasta_ftp_raw.split("/")[-1]
+            ExternalResource.objects.update_or_create(
+                source_system=ExternalResource.SourceSystem.ENA,
+                accession=genome_acc,
+                ingest=ingest,
+                defaults={
+                    "url": fasta_url,
+                    "genome": genome,
+                    "sample": None,
+                    "run": None,
+                    "first_created_external": ena_first_created,
+                    "last_modified_external": ena_last_updated,
+                },
+            )
 
         sample_acc_for_url = biosample_acc or ena_sample_acc
         if sample_acc_for_url:
@@ -225,8 +206,8 @@ class Command(BaseCommand):
                     "genome": genome,
                     "run": None,
                     "sample": None,
-                    "first_created_external": biosample_first_created,
-                    "last_modified_external": upstream_last_modified,
+                    "first_created_external": ena_first_created,
+                    "last_modified_external": ena_last_updated,
                 },
             )
 
