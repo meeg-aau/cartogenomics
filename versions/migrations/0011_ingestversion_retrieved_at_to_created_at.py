@@ -13,7 +13,10 @@ def copy_retrieved_at(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("versions", "0010_rename_upstream_last_modified_ingestversion_last_modified_internal_and_more"),
+        (
+            "versions",
+            "0010_rename_upstream_last_modified_ingestversion_last_modified_internal_and_more",
+        ),
     ]
 
     operations = [

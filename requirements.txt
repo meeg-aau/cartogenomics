@@ -1,3 +1,6 @@
+# Requires system libgdal/libgeos/libproj (e.g. apt: gdal-bin libgdal-dev
+# libgeos-dev libproj-dev, or conda-forge: gdal geos proj) - django.contrib.gis
+# talks to them via ctypes, no pip GDAL/osgeo package needed.
 Django>=5.0,<6.0
 psycopg[binary]>=3.1
 requests>=2.31

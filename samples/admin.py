@@ -1,12 +1,13 @@
-from django.contrib import admin
-from django.utils.html import format_html
 import json
+
+from django.contrib.gis import admin
+from django.utils.html import format_html
 
 from .models import Sample
 
 
 @admin.register(Sample)
-class SampleAdmin(admin.ModelAdmin):
+class SampleAdmin(admin.GISModelAdmin):
     list_display = (
         "biosample",
         "ena_sample",
@@ -16,6 +17,7 @@ class SampleAdmin(admin.ModelAdmin):
         "ontology_preview",
         "latitude",
         "longitude",
+        "inferred_country_code",
         "geography_check_status",
         "geography_status_reason",
         "ingest",
@@ -35,6 +37,7 @@ class SampleAdmin(admin.ModelAdmin):
         "ontology",
         "geography_check_status",
         "geography_status_reason",
+        "inferred_country_code",
         "ingest",
     )
 
@@ -51,6 +54,7 @@ class SampleAdmin(admin.ModelAdmin):
         "ena_sample",
         "source_dataset",
         "ingest",
+        "location",
         "latitude",
         "longitude",
         "region",
@@ -58,6 +62,9 @@ class SampleAdmin(admin.ModelAdmin):
         "ontology",
         "geography_check_status",
         "geography_status_reason",
+        "inferred_country_code",
+        "coordinates_reversed",
+        "coord_precision_deg",
         "pretty_raw_metadata",
         "created_at",
         "updated_at",

@@ -23,6 +23,11 @@ def _parse_params(post):
         "lat_max": _float(post.get("lat_max")),
         "lon_min": _float(post.get("lon_min")),
         "lon_max": _float(post.get("lon_max")),
+        "near_lat": _float(post.get("near_lat")),
+        "near_lon": _float(post.get("near_lon")),
+        "radius_km": _float(post.get("radius_km")),
+        "country_code": post.get("country_code") or None,
+        "polygon": post.get("polygon") or None,
         "release_label": post.get("release_label") or None,
         "include_runs": bool(post.get("include_runs")),
         "include_genomes": bool(post.get("include_genomes")),
@@ -36,9 +41,13 @@ def _parse_params(post):
 
 class ExportView(View):
     def get(self, request):
-        return render(request, "rocrates/export.html", {
-            "source_datasets": Sample.SourceDataset.choices,
-        })
+        return render(
+            request,
+            "rocrates/export.html",
+            {
+                "source_datasets": Sample.SourceDataset.choices,
+            },
+        )
 
     def post(self, request):
         params = _parse_params(request.POST)

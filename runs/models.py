@@ -1,4 +1,5 @@
 from django.db import models
+
 from samples.models import Sample
 from versions.models import IngestVersion
 

@@ -61,9 +61,21 @@ class ExternalResource(models.Model):
         constraints = [
             CheckConstraint(
                 check=(
-                    (Q(sample__isnull=False) & Q(run__isnull=True) & Q(genome__isnull=True)) |
-                    (Q(sample__isnull=True) & Q(run__isnull=False) & Q(genome__isnull=True)) |
-                    (Q(sample__isnull=True) & Q(run__isnull=True) & Q(genome__isnull=False))
+                    (
+                        Q(sample__isnull=False)
+                        & Q(run__isnull=True)
+                        & Q(genome__isnull=True)
+                    )
+                    | (
+                        Q(sample__isnull=True)
+                        & Q(run__isnull=False)
+                        & Q(genome__isnull=True)
+                    )
+                    | (
+                        Q(sample__isnull=True)
+                        & Q(run__isnull=True)
+                        & Q(genome__isnull=False)
+                    )
                 ),
                 name="externalresource_has_only_one_target",
             ),

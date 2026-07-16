@@ -3,18 +3,18 @@ import logging
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
-
-from genomes.models import Genome, GenomeVersion
-from versions.models import IngestVersion, CartogenomicsRelease
-from external.models import ExternalResource
+from sample_metadata_curation.curate import curate_biosample
 
 from api_fetch import parse_iso_date
 from api_fetch.biosamples import get_basic_sample_data
 from api_fetch.ena import ENAClient
-from sample_metadata_curation.curate import curate_biosample
+from external.models import ExternalResource
+from genomes.models import Genome, GenomeVersion
+from versions.models import CartogenomicsRelease, IngestVersion
 
 logger = logging.getLogger(__name__)
 ena_api = ENAClient()
+
 
 class Command(BaseCommand):
     help = "Ingest genomes and their quality metrics from BioSamples."
@@ -46,14 +46,14 @@ class Command(BaseCommand):
             "-pv",
             type=str,
             default="",
-            help='Pipeline version',
+            help="Pipeline version",
         )
         parser.add_argument(
             "--release-label",
             "-rl",
             type=str,
             default="1.0",
-            help='Cartogenomics release label',
+            help="Cartogenomics release label",
         )
 
     @transaction.atomic
@@ -79,7 +79,7 @@ class Command(BaseCommand):
 
         fetch_acc = biosample_acc or ena_sample_acc
         if not fetch_acc:
-             raise CommandError(f"No sample accession found for {accession}")
+            raise CommandError(f"No sample accession found for {accession}")
 
         try:
             raw = get_basic_sample_data(fetch_acc)
@@ -111,7 +111,7 @@ class Command(BaseCommand):
             defaults={
                 "pipeline_version": pipeline_version,
                 "release": release,
-            }
+            },
         )
 
         curated_defaults = {
@@ -129,7 +129,8 @@ class Command(BaseCommand):
         try:
             existing = Genome.objects.get(accession=genome_acc)
             changed_fields = [
-                field for field, value in curated_defaults.items()
+                field
+                for field, value in curated_defaults.items()
                 if getattr(existing, field) != value
             ]
             if changed_fields:
@@ -139,7 +140,8 @@ class Command(BaseCommand):
                 )
             else:
                 logger.info(
-                    f"Genome {genome_acc} already exists (id={existing.pk}) and no fields changed."
+                    f"Genome {genome_acc} already exists (id={existing.pk}) "
+                    "and no fields changed."
                 )
         except Genome.DoesNotExist:
             logger.info(f"Genome {genome_acc} not found in DB - will be created.")
@@ -159,7 +161,8 @@ class Command(BaseCommand):
             "taxonomy": genome.taxonomy,
         }
 
-        #   grab current valid version, set end date to now, open new version from now to keep provenance
+        #   grab current valid version, set end date to now, open new
+        #   version from now to keep provenance
         if created:
             GenomeVersion.objects.create(
                 genome=genome,
@@ -169,7 +172,9 @@ class Command(BaseCommand):
                 **version_fields,
             )
         elif changed_fields:
-            GenomeVersion.objects.filter(genome=genome, valid_to__isnull=True).update(valid_to=now)
+            GenomeVersion.objects.filter(genome=genome, valid_to__isnull=True).update(
+                valid_to=now
+            )
             GenomeVersion.objects.create(
                 genome=genome,
                 ingest=ingest,
@@ -179,8 +184,11 @@ class Command(BaseCommand):
             )
 
         if fasta_ftp_raw:
-            fasta_url = f"https://{fasta_ftp_raw}" if not fasta_ftp_raw.startswith("http") else fasta_ftp_raw
-            fasta_filename = fasta_ftp_raw.split("/")[-1]
+            fasta_url = (
+                f"https://{fasta_ftp_raw}"
+                if not fasta_ftp_raw.startswith("http")
+                else fasta_ftp_raw
+            )
             ExternalResource.objects.update_or_create(
                 source_system=ExternalResource.SourceSystem.ENA,
                 accession=genome_acc,
@@ -198,11 +206,18 @@ class Command(BaseCommand):
         sample_acc_for_url = biosample_acc or ena_sample_acc
         if sample_acc_for_url:
             ExternalResource.objects.update_or_create(
-                source_system=ExternalResource.SourceSystem.BIOSAMPLES if biosample_acc else ExternalResource.SourceSystem.ENA,
+                source_system=(
+                    ExternalResource.SourceSystem.BIOSAMPLES
+                    if biosample_acc
+                    else ExternalResource.SourceSystem.ENA
+                ),
                 accession=genome_acc,
                 ingest=ingest,
                 defaults={
-                    "url": f"https://www.ebi.ac.uk/biosamples/samples/{sample_acc_for_url}.json",
+                    "url": (
+                        f"https://www.ebi.ac.uk/biosamples/samples/"
+                        f"{sample_acc_for_url}.json"
+                    ),
                     "genome": genome,
                     "run": None,
                     "sample": None,
@@ -211,6 +226,9 @@ class Command(BaseCommand):
                 },
             )
 
-        self.stdout.write(self.style.SUCCESS(
-            f"{'Created' if created else 'Updated'} Genome {genome_acc} linked to BioSample {biosample_acc}"
-        ))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"{'Created' if created else 'Updated'} Genome {genome_acc} "
+                f"linked to BioSample {biosample_acc}"
+            )
+        )

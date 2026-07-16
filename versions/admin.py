@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import IngestVersion, CartogenomicsRelease
+
+from .models import CartogenomicsRelease, IngestVersion
 
 
 @admin.register(IngestVersion)

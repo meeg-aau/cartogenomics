@@ -1,5 +1,5 @@
-from django.core.management.base import BaseCommand
 from django.core.management import call_command
+from django.core.management.base import BaseCommand
 
 
 class Command(BaseCommand):
@@ -78,4 +78,6 @@ class Command(BaseCommand):
                 if not continue_on_error:
                     raise
 
-        self.stdout.write(self.style.SUCCESS(f"Finished. Success: {success}, Failed: {failed}"))
+        self.stdout.write(
+            self.style.SUCCESS(f"Finished. Success: {success}, Failed: {failed}")
+        )

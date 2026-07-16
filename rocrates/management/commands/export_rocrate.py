@@ -16,10 +16,38 @@ class Command(BaseCommand):
             "--ontology",
             help='Substring match on Sample.ontology, e.g. "forest"',
         )
-        sample.add_argument("--lat-min", type=float)
-        sample.add_argument("--lat-max", type=float)
-        sample.add_argument("--lon-min", type=float)
-        sample.add_argument("--lon-max", type=float)
+
+        #   Only one location filter (bbox / radius / country / polygon) at a time
+        bbox_group = parser.add_argument_group("Bounding box filter")
+        bbox_group.add_argument("--lat-min", type=float)
+        bbox_group.add_argument("--lat-max", type=float)
+        bbox_group.add_argument("--lon-min", type=float)
+        bbox_group.add_argument("--lon-max", type=float)
+
+        radius_group = parser.add_argument_group("Radius filter")
+        radius_group.add_argument(
+            "--near-lat", type=float, help="Latitude of center point for radius search"
+        )
+        radius_group.add_argument(
+            "--near-lon", type=float, help="Longitude of center point for radius search"
+        )
+        radius_group.add_argument(
+            "--radius-km",
+            type=float,
+            help="Radius in km around --near-lat/--near-lon (requires both)",
+        )
+
+        sample.add_argument(
+            "--country-code",
+            help=(
+                'ISO 3166-1 alpha-2 country code, e.g. "DK" '
+                "(matched against CountryBoundary)"
+            ),
+        )
+        sample.add_argument(
+            "--polygon",
+            help="Arbitrary region as WKT or GeoJSON, e.g. 'POLYGON((...))'",
+        )
         sample.add_argument(
             "--release-label",
             help='Restrict samples to a CartogenomicsRelease, e.g. "1.0"',
@@ -60,13 +88,14 @@ class Command(BaseCommand):
         # --- Output ---
         output = parser.add_argument_group("Output")
         output.add_argument(
-            "--output", "-o",
+            "--output",
+            "-o",
             default="export.zip",
             help="Output zip file path (default: export.zip)",
         )
         output.add_argument(
             "--label",
-            help="Human-readable crate name (auto-generated if omitted)",
+            help="User preferred crate name. Auto-generated if not provided",
         )
 
     def handle(self, *args, **options):
@@ -84,6 +113,11 @@ class Command(BaseCommand):
                 lat_max=options.get("lat_max"),
                 lon_min=options.get("lon_min"),
                 lon_max=options.get("lon_max"),
+                near_lat=options.get("near_lat"),
+                near_lon=options.get("near_lon"),
+                radius_km=options.get("radius_km"),
+                country_code=options.get("country_code"),
+                polygon=options.get("polygon"),
                 release_label=options.get("release_label"),
                 include_runs=not options["no_runs"],
                 include_genomes=options["include_genomes"],

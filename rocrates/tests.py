@@ -1,7 +1,9 @@
+from django.contrib.gis.geos import MultiPolygon, Point, Polygon
 from django.test import TestCase
 
 from external.models import ExternalResource
 from genomes.models import Genome
+from regions.models import CountryBoundary
 from rocrates.builder import build_crate
 from runs.models import Run
 from samples.models import Sample
@@ -39,6 +41,16 @@ class BuildCrateTest(TestCase):
             region="Denmark",
         )
         defaults.update(kwargs)
+        #   mirror ingest_sample.py: location is derived from lat/lon unless
+        #   explicitly overridden, so spatial filters have something to match
+        if (
+            "location" not in defaults
+            and defaults.get("latitude") is not None
+            and defaults.get("longitude") is not None
+        ):
+            defaults["location"] = Point(
+                defaults["longitude"], defaults["latitude"], srid=4326
+            )
         return Sample.objects.create(**defaults)
 
     def _make_genome(self, accession="GCA_001", **kwargs):
@@ -77,7 +89,6 @@ class BuildCrateTest(TestCase):
             run=run,
         )
 
-
     def test_root_metadata_label_uses_filters(self):
         crate = build_crate(source_dataset="MFD", release_label="1.0")
         self.assertIn("MFD", crate.root_dataset["name"])
@@ -89,6 +100,7 @@ class BuildCrateTest(TestCase):
 
     def test_root_metadata_date_published_set(self):
         from datetime import date
+
         crate = build_crate()
         self.assertEqual(crate.root_dataset["datePublished"], str(date.today()))
 
@@ -99,6 +111,22 @@ class BuildCrateTest(TestCase):
     def test_root_metadata_no_spatial_coverage_without_bbox(self):
         crate = build_crate()
         self.assertNotIn("spatialCoverage", crate.root_dataset)
+
+    def test_root_metadata_label_includes_country_code(self):
+        denmark = Polygon(
+            ((8.0, 54.5), (8.0, 57.7), (12.7, 57.7), (12.7, 54.5), (8.0, 54.5))
+        )
+        CountryBoundary.objects.create(
+            iso_two_cc="DK", name="Denmark", geom=MultiPolygon(denmark)
+        )
+        crate = build_crate(country_code="dk")
+        self.assertIn("country:DK", crate.root_dataset["name"])
+        self.assertEqual(crate.root_dataset["exportFilters"]["countryCode"], "DK")
+
+    def test_root_metadata_filters_include_polygon(self):
+        polygon_wkt = "POLYGON((5 50, 5 60, 15 60, 15 50, 5 50))"
+        crate = build_crate(polygon=polygon_wkt)
+        self.assertEqual(crate.root_dataset["exportFilters"]["polygon"], polygon_wkt)
 
     # ------------------------------------------------------------------
     # Sample entities
@@ -111,7 +139,9 @@ class BuildCrateTest(TestCase):
         self.assertIsNotNone(entity)
 
     def test_sample_entity_properties(self):
-        self._make_sample(biosample="SAMEA002", ontology="grassland biome", region="Germany")
+        self._make_sample(
+            biosample="SAMEA002", ontology="grassland biome", region="Germany"
+        )
         crate = build_crate()
         entity = crate.get("#sample-SAMEA002")
         self.assertEqual(entity["environmentType"], "grassland biome")
@@ -137,23 +167,138 @@ class BuildCrateTest(TestCase):
     # ------------------------------------------------------------------
 
     def test_filter_by_source_dataset(self):
-        self._make_sample(biosample="SAMEA001", ena_sample="ERS001", source_dataset="MFD")
-        self._make_sample(biosample="SAMEA002", ena_sample="ERS002", source_dataset="GTDB")
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", source_dataset="MFD"
+        )
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", source_dataset="GTDB"
+        )
         crate = build_crate(source_dataset="MFD")
         self.assertIsNotNone(crate.get("#sample-SAMEA001"))
         self.assertIsNone(crate.get("#sample-SAMEA002"))
 
     def test_filter_by_ontology_substring(self):
-        self._make_sample(biosample="SAMEA001", ena_sample="ERS001", ontology="forest biome")
-        self._make_sample(biosample="SAMEA002", ena_sample="ERS002", ontology="marine biome")
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", ontology="forest biome"
+        )
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", ontology="marine biome"
+        )
         crate = build_crate(ontology="forest")
         self.assertIsNotNone(crate.get("#sample-SAMEA001"))
         self.assertIsNone(crate.get("#sample-SAMEA002"))
 
     def test_filter_by_lat_lon_bbox(self):
-        self._make_sample(biosample="SAMEA001", ena_sample="ERS001", latitude=55.0, longitude=10.0)
-        self._make_sample(biosample="SAMEA002", ena_sample="ERS002", latitude=40.0, longitude=2.0)
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", latitude=55.0, longitude=10.0
+        )
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", latitude=40.0, longitude=2.0
+        )
         crate = build_crate(lat_min=50.0, lat_max=60.0, lon_min=5.0, lon_max=15.0)
+        self.assertIsNotNone(crate.get("#sample-SAMEA001"))
+        self.assertIsNone(crate.get("#sample-SAMEA002"))
+
+    def test_filter_by_radius(self):
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", latitude=55.68, longitude=12.57
+        )  # Copenhagen
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", latitude=48.86, longitude=2.35
+        )  # Paris
+        crate = build_crate(near_lat=55.68, near_lon=12.57, radius_km=50)
+        self.assertIsNotNone(crate.get("#sample-SAMEA001"))
+        self.assertIsNone(crate.get("#sample-SAMEA002"))
+
+    def test_filter_by_country_code(self):
+        denmark = Polygon(
+            ((8.0, 54.5), (8.0, 57.7), (12.7, 57.7), (12.7, 54.5), (8.0, 54.5))
+        )
+        CountryBoundary.objects.create(
+            iso_two_cc="DK", name="Denmark", geom=MultiPolygon(denmark)
+        )
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", latitude=55.68, longitude=12.57
+        )  # Copenhagen
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", latitude=48.86, longitude=2.35
+        )  # Paris
+        crate = build_crate(country_code="dk")
+        self.assertIsNotNone(crate.get("#sample-SAMEA001"))
+        self.assertIsNone(crate.get("#sample-SAMEA002"))
+
+    def test_filter_by_unknown_country_code_raises(self):
+        with self.assertRaises(ValueError):
+            build_crate(country_code="ZZ")
+
+    def test_bbox_and_radius_together_raises(self):
+        with self.assertRaises(ValueError):
+            build_crate(
+                lat_min=50.0,
+                lat_max=60.0,
+                lon_min=5.0,
+                lon_max=15.0,
+                near_lat=55.0,
+                near_lon=10.0,
+                radius_km=50,
+            )
+
+    def test_bbox_and_country_code_together_raises(self):
+        denmark = Polygon(
+            ((8.0, 54.5), (8.0, 57.7), (12.7, 57.7), (12.7, 54.5), (8.0, 54.5))
+        )
+        CountryBoundary.objects.create(
+            iso_two_cc="DK", name="Denmark", geom=MultiPolygon(denmark)
+        )
+        with self.assertRaises(ValueError):
+            build_crate(
+                lat_min=50.0, lat_max=60.0, lon_min=5.0, lon_max=15.0, country_code="DK"
+            )
+
+    def test_polygon_and_country_code_together_raises(self):
+        denmark = Polygon(
+            ((8.0, 54.5), (8.0, 57.7), (12.7, 57.7), (12.7, 54.5), (8.0, 54.5))
+        )
+        CountryBoundary.objects.create(
+            iso_two_cc="DK", name="Denmark", geom=MultiPolygon(denmark)
+        )
+        with self.assertRaises(ValueError):
+            build_crate(
+                polygon="POLYGON((5 50, 5 60, 15 60, 15 50, 5 50))", country_code="DK"
+            )
+
+    def test_non_spatial_filters_still_combine_with_one_location_filter(self):
+        """source_dataset/ontology/release_label aren't part of the
+        mutual-exclusivity rule."""
+        self._make_sample(
+            biosample="SAMEA001",
+            ena_sample="ERS001",
+            latitude=55.0,
+            longitude=10.0,
+            source_dataset="MFD",
+        )
+        self._make_sample(
+            biosample="SAMEA002",
+            ena_sample="ERS002",
+            latitude=55.0,
+            longitude=10.0,
+            source_dataset="GTDB",
+        )
+        crate = build_crate(
+            lat_min=50.0, lat_max=60.0, lon_min=5.0, lon_max=15.0, source_dataset="MFD"
+        )
+        self.assertIsNotNone(crate.get("#sample-SAMEA001"))
+        self.assertIsNone(crate.get("#sample-SAMEA002"))
+
+    def test_filter_by_custom_polygon_wkt(self):
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", latitude=55.0, longitude=10.0
+        )
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", latitude=40.0, longitude=2.0
+        )
+        polygon_wkt = "POLYGON((5 50, 5 60, 15 60, 15 50, 5 50))"
+        crate = build_crate(polygon=polygon_wkt)
         self.assertIsNotNone(crate.get("#sample-SAMEA001"))
         self.assertIsNone(crate.get("#sample-SAMEA002"))
 
@@ -167,8 +312,10 @@ class BuildCrateTest(TestCase):
         )
         self._make_sample(biosample="SAMEA001", ena_sample="ERS001")  # release 1.0
         Sample.objects.create(
-            biosample="SAMEA002", ena_sample="ERS002",
-            source_dataset="MFD", ingest=other_ingest,
+            biosample="SAMEA002",
+            ena_sample="ERS002",
+            source_dataset="MFD",
+            ingest=other_ingest,
         )
         crate = build_crate(release_label="1.0")
         self.assertIsNotNone(crate.get("#sample-SAMEA001"))
@@ -182,7 +329,10 @@ class BuildCrateTest(TestCase):
     def test_empty_queryset_produces_valid_crate(self):
         crate = build_crate(source_dataset="NONEXISTENT")
         self.assertIsNotNone(crate.root_dataset)
-        self.assertEqual(len([e for e in crate.contextual_entities if e.id.startswith("#sample-")]), 0)
+        self.assertEqual(
+            len([e for e in crate.contextual_entities if e.id.startswith("#sample-")]),
+            0,
+        )
 
     # ------------------------------------------------------------------
     # Run entities
@@ -261,8 +411,10 @@ class BuildCrateTest(TestCase):
         )
         self._make_genome(accession="GCA_001")  # release 1.0
         Genome.objects.create(
-            accession="GCA_002", ingest=other_ingest,
-            completeness=90.0, contamination=2.0,
+            accession="GCA_002",
+            ingest=other_ingest,
+            completeness=90.0,
+            contamination=2.0,
         )
         crate = build_crate(include_genomes=True, genome_release_label="1.0")
         self.assertIsNotNone(crate.get("#genome-GCA_001"))
@@ -322,9 +474,13 @@ class BuildCrateTest(TestCase):
 
     def test_parquet_external_resource_skipped(self):
         sample = self._make_sample()
-        self._make_external("https://biostudies.ebi.ac.uk/data/abundance.parquet", sample=sample)
+        self._make_external(
+            "https://biostudies.ebi.ac.uk/data/abundance.parquet", sample=sample
+        )
         crate = build_crate()
-        self.assertIsNone(crate.get("https://biostudies.ebi.ac.uk/data/abundance.parquet"))
+        self.assertIsNone(
+            crate.get("https://biostudies.ebi.ac.uk/data/abundance.parquet")
+        )
 
     def test_media_type_set_for_fasta(self):
         sample = self._make_sample()
@@ -347,11 +503,12 @@ class BuildCrateTest(TestCase):
     def test_ingest_action_entity_created(self):
         self._make_sample()
         crate = build_crate()
-        ingest_id = f"#ingest-biosamples-sample_metadata-test_sample_ingest"
+        ingest_id = "#ingest-biosamples-sample_metadata-test_sample_ingest"
         self.assertIsNotNone(crate.get(ingest_id))
 
     def test_ingest_action_has_end_time(self):
         from django.utils import timezone as tz
+
         self.sample_ingest.retrieved_at = tz.now()
         self.sample_ingest.save()
         self._make_sample()
@@ -450,8 +607,11 @@ class BuildCrateTest(TestCase):
 
     def test_external_file_date_created_set(self):
         from django.utils import timezone as tz
+
         sample = self._make_sample()
-        ext = self._make_external("https://ena.ebi.ac.uk/files/sample.fasta", sample=sample)
+        ext = self._make_external(
+            "https://ena.ebi.ac.uk/files/sample.fasta", sample=sample
+        )
         ext.first_created_external = tz.now()
         ext.save()
         crate = build_crate()
@@ -460,8 +620,11 @@ class BuildCrateTest(TestCase):
 
     def test_external_file_date_modified_set(self):
         from django.utils import timezone as tz
+
         sample = self._make_sample()
-        ext = self._make_external("https://ena.ebi.ac.uk/files/sample.fasta", sample=sample)
+        ext = self._make_external(
+            "https://ena.ebi.ac.uk/files/sample.fasta", sample=sample
+        )
         ext.last_modified_external = tz.now()
         ext.save()
         crate = build_crate()
@@ -474,8 +637,12 @@ class BuildCrateTest(TestCase):
 
     def test_sample_queryset_bypasses_filters(self):
         """Passing sample_queryset= ignores all sample filter kwargs."""
-        self._make_sample(biosample="SAMEA001", ena_sample="ERS001", source_dataset="MFD")
-        self._make_sample(biosample="SAMEA002", ena_sample="ERS002", source_dataset="GTDB")
+        self._make_sample(
+            biosample="SAMEA001", ena_sample="ERS001", source_dataset="MFD"
+        )
+        self._make_sample(
+            biosample="SAMEA002", ena_sample="ERS002", source_dataset="GTDB"
+        )
         qs = Sample.objects.filter(source_dataset="GTDB")
         # source_dataset="MFD" filter is ignored because queryset is explicit
         crate = build_crate(sample_queryset=qs, source_dataset="MFD")
@@ -487,6 +654,8 @@ class BuildCrateTest(TestCase):
         self._make_genome(accession="GCA_001", completeness=95.0)
         self._make_genome(accession="GCA_002", completeness=30.0)
         qs = Genome.objects.filter(accession="GCA_002")
-        crate = build_crate(include_genomes=True, genome_queryset=qs, min_completeness=80.0)
+        crate = build_crate(
+            include_genomes=True, genome_queryset=qs, min_completeness=80.0
+        )
         self.assertIsNone(crate.get("#genome-GCA_001"))
         self.assertIsNotNone(crate.get("#genome-GCA_002"))

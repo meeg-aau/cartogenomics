@@ -37,15 +37,19 @@ from datetime import date, datetime, timezone
 
 import duckdb
 from django.conf import settings
-from rocrate.rocrate import ROCrate
+from django.contrib.gis.geos import GEOSGeometry, Point, Polygon
+from django.contrib.gis.measure import D
 from rocrate.model.contextentity import ContextEntity
+from rocrate.rocrate import ROCrate
 
-from versions.models import CartogenomicsRelease
-from samples.models import Sample
 from genomes.models import Genome
+from regions.models import CountryBoundary
 from runs.models import Run
+from samples.models import Sample
+from versions.models import CartogenomicsRelease
 
 logger = logging.getLogger(__name__)
+
 
 def build_crate(**kwargs) -> ROCrate:
     return CrateBuilder(**kwargs).build()
@@ -57,9 +61,8 @@ class CrateBuilder:
         self,
         *,
         label: str | None = None,
-
         # --- Sample selection ---
-        sample_queryset = None,
+        sample_queryset=None,
         include_samples: bool = True,
         source_dataset: str | None = None,
         ontology: str | None = None,
@@ -67,16 +70,19 @@ class CrateBuilder:
         lat_max: float | None = None,
         lon_min: float | None = None,
         lon_max: float | None = None,
+        near_lat: float | None = None,
+        near_lon: float | None = None,
+        radius_km: float | None = None,
+        country_code: str | None = None,
+        polygon: str | None = None,
         release_label: str | None = None,
         include_runs: bool = True,
-
         # --- Genome selection ---
-        genome_queryset = None,
+        genome_queryset=None,
         include_genomes: bool = False,
         genome_release_label: str | None = None,
         min_completeness: float | None = None,
         max_contamination: float | None = None,
-
         # --- Abundance cross-filter ---
         # Keep all filtered samples; include genomes detected in them.
         link_via_abundance: bool = False,
@@ -91,6 +97,11 @@ class CrateBuilder:
         self.lat_max = lat_max
         self.lon_min = lon_min
         self.lon_max = lon_max
+        self.near_lat = near_lat
+        self.near_lon = near_lon
+        self.radius_km = radius_km
+        self.country_code = country_code
+        self.polygon = polygon
         self.release_label = release_label
         self.include_runs = include_runs
         self.genome_queryset = genome_queryset
@@ -106,10 +117,10 @@ class CrateBuilder:
         self.genomes: list = []
 
     def build(self) -> ROCrate:
-        self._resolve_querysets() # query DB, populate samples and genomes
-        self.crate = ROCrate() #    create an empty crate
+        self._resolve_querysets()  # query DB, populate samples and genomes
+        self.crate = ROCrate()  # create an empty crate
         self._add_cartogenomics_db_entity()
-        self._add_export_action() # set a timestamp for export
+        self._add_export_action()  # set a timestamp for export
         self._set_root_metadata()
         #   loop to add sample and run
         for sample in self.samples:
@@ -136,10 +147,14 @@ class CrateBuilder:
                 self.genome_queryset = self._apply_genome_filters(Genome.objects.all())
 
         if self.link_via_abundance and self.include_samples and self.include_genomes:
-            self.sample_queryset, self.genome_queryset = self._cross_filter_via_abundance()
+            self.sample_queryset, self.genome_queryset = (
+                self._cross_filter_via_abundance()
+            )
 
         if self.include_samples:
-            self.sample_queryset = self.sample_queryset.select_related("ingest__release").prefetch_related(
+            self.sample_queryset = self.sample_queryset.select_related(
+                "ingest__release"
+            ).prefetch_related(
                 "external_resources",
                 "runs__external_resources",
                 "runs__ingest",
@@ -147,24 +162,86 @@ class CrateBuilder:
             self.samples = list(self.sample_queryset)
 
         if self.include_genomes:
-            self.genome_queryset = self.genome_queryset.select_related("ingest__release").prefetch_related(
+            self.genome_queryset = self.genome_queryset.select_related(
+                "ingest__release"
+            ).prefetch_related(
                 "external_resources",
             )
             self.genomes = list(self.genome_queryset)
 
+    def _validate_location_filters(self):
+        #   authoritative check - covers the CLI, the web/Celery path
+        #   (rocrates/views.py), and any other caller of build_crate(),
+        #   regardless of whether the CLI's argparse group already caught it
+        active = []
+        if any(
+            v is not None
+            for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]
+        ):
+            active.append("bbox")
+        if (
+            self.near_lat is not None
+            and self.near_lon is not None
+            and self.radius_km is not None
+        ):
+            active.append("radius")
+        if self.country_code:
+            active.append("country_code")
+        if self.polygon:
+            active.append("polygon")
+        if len(active) > 1:
+            raise ValueError(
+                "Only one location filter can be used at a time, got: "
+                + ", ".join(active)
+            )
+
     def _apply_sample_filters(self, qs):
+        self._validate_location_filters()
         if self.source_dataset:
             qs = qs.filter(source_dataset=self.source_dataset)
         if self.ontology:
             qs = qs.filter(ontology__icontains=self.ontology)
-        if self.lat_min is not None:
-            qs = qs.filter(latitude__gte=self.lat_min)
-        if self.lat_max is not None:
-            qs = qs.filter(latitude__lte=self.lat_max)
-        if self.lon_min is not None:
-            qs = qs.filter(longitude__gte=self.lon_min)
-        if self.lon_max is not None:
-            qs = qs.filter(longitude__lte=self.lon_max)
+        if any(
+            v is not None
+            for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]
+        ):
+            lon_min = self.lon_min if self.lon_min is not None else -180
+            lat_min = self.lat_min if self.lat_min is not None else -90
+            lon_max = self.lon_max if self.lon_max is not None else 180
+            lat_max = self.lat_max if self.lat_max is not None else 90
+            bbox = Polygon.from_bbox((lon_min, lat_min, lon_max, lat_max))
+            bbox.srid = 4326
+            #   location is a geography column; ST_Within isn't defined for
+            #   geography so Django would silently cast it to plain geometry
+            #   (planar) for `within`. ST_Intersects IS a native geography
+            #   operation, so this keeps the check geodesic/curvature-aware.
+            qs = qs.filter(location__intersects=bbox)
+        if (
+            self.near_lat is not None
+            and self.near_lon is not None
+            and self.radius_km is not None
+        ):
+            center = Point(self.near_lon, self.near_lat, srid=4326)
+            qs = qs.filter(location__distance_lte=(center, D(km=self.radius_km)))
+        if self.country_code:
+            boundary = CountryBoundary.objects.filter(
+                iso_two_cc=self.country_code.upper()
+            ).first()
+            if boundary is None:
+                raise ValueError(
+                    f"No CountryBoundary found for country code {self.country_code!r}"
+                )
+            qs = qs.filter(location__intersects=boundary.geom)
+        if self.polygon:
+            try:
+                geom = GEOSGeometry(self.polygon)
+            except Exception as e:
+                raise ValueError(
+                    f"Could not parse --polygon value as WKT/GeoJSON: {e}"
+                ) from e
+            if geom.srid is None:
+                geom.srid = 4326
+            qs = qs.filter(location__intersects=geom)
         if self.release_label:
             qs = qs.filter(ingest__release__label=self.release_label)
         return qs
@@ -181,28 +258,43 @@ class CrateBuilder:
     def _cross_filter_via_abundance(self):
         abundance_file = getattr(settings, "ABUNDANCE_FILE", None)
         if not abundance_file or not os.path.exists(abundance_file):
-            logger.warning("No abundance file found at %s; skipping cross-filtering", abundance_file)
+            logger.warning(
+                "No abundance file found at %s; skipping cross-filtering",
+                abundance_file,
+            )
             return self.sample_queryset, self.genome_queryset
 
         con = duckdb.connect()
-        parquet_cols = {row[0] for row in con.execute(
-            f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
-        ).fetchall()}
+        parquet_cols = {
+            row[0]
+            for row in con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
+            ).fetchall()
+        }
 
         run_accessions = list(
-            Run.objects.filter(sample__in=self.sample_queryset).values_list("accession", flat=True)
+            Run.objects.filter(sample__in=self.sample_queryset).values_list(
+                "accession", flat=True
+            )
         )
         matching_runs = [r for r in run_accessions if r in parquet_cols]
         if not matching_runs:
             con.close()
-            logger.warning("No matching runs found in %s for %d samples", abundance_file, self.sample_queryset.count())
+            logger.warning(
+                "No matching runs found in %s for %d samples",
+                abundance_file,
+                self.sample_queryset.count(),
+            )
             return self.sample_queryset, self.genome_queryset.none()
 
-        genome_accessions = list(self.genome_queryset.values_list("accession", flat=True))
+        genome_accessions = list(
+            self.genome_queryset.values_list("accession", flat=True)
+        )
         col_select = ", ".join(f'"{r}"' for r in matching_runs)
         genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
 
-        result = con.execute(f"""
+        result = con.execute(
+            f"""
             WITH long AS (
                 UNPIVOT (
                     SELECT genome_id, {col_select}
@@ -215,11 +307,14 @@ class CrateBuilder:
             SELECT array_agg(DISTINCT genome_id)
             FROM long
             WHERE abundance > {self.min_abundance}
-        """).fetchone()
+        """
+        ).fetchone()
         con.close()
 
         present_genomes = result[0] if result else []
-        return self.sample_queryset, self.genome_queryset.filter(accession__in=present_genomes)
+        return self.sample_queryset, self.genome_queryset.filter(
+            accession__in=present_genomes
+        )
 
     # -----------------------------------------------------------------------
     # Root dataset + export action
@@ -231,13 +326,32 @@ class CrateBuilder:
             parts.append(self.source_dataset)
         if self.ontology:
             parts.append(self.ontology)
-        if any(v is not None for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]):
-            parts.append(f"bbox({self.lat_min},{self.lat_max},{self.lon_min},{self.lon_max})")
+        if any(
+            v is not None
+            for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]
+        ):
+            parts.append(
+                f"bbox({self.lat_min},{self.lat_max},{self.lon_min},{self.lon_max})"
+            )
+        if (
+            self.near_lat is not None
+            and self.near_lon is not None
+            and self.radius_km is not None
+        ):
+            parts.append(
+                f"within {self.radius_km}km of ({self.near_lat},{self.near_lon})"
+            )
+        if self.country_code:
+            parts.append(f"country:{self.country_code.upper()}")
+        if self.polygon:
+            parts.append("within custom polygon")
         if self.release_label:
             parts.append(f"release:{self.release_label}")
 
         crate_label = self.label or (
-            "Cartogenomics export — " + " | ".join(parts) if parts else "Cartogenomics export"
+            "Cartogenomics export — " + " | ".join(parts)
+            if parts
+            else "Cartogenomics export"
         )
 
         description_parts = []
@@ -249,22 +363,39 @@ class CrateBuilder:
         self.crate.root_dataset["name"] = crate_label
         self.crate.root_dataset["datePublished"] = str(date.today())
         self.crate.root_dataset["description"] = (
-            (", ".join(description_parts) + f" exported from Cartogenomics DB on {date.today()}.")
-            if description_parts else f"Cartogenomics export — {date.today()}"
+            (
+                ", ".join(description_parts)
+                + f" exported from Cartogenomics DB on {date.today()}."
+            )
+            if description_parts
+            else f"Cartogenomics export — {date.today()}"
         )
         self.crate.root_dataset["keywords"] = [
-            p for p in [self.source_dataset, self.ontology, self.release_label, self.genome_release_label] if p
+            p
+            for p in [
+                self.source_dataset,
+                self.ontology,
+                self.release_label,
+                self.genome_release_label,
+            ]
+            if p
         ]
         self.crate.root_dataset["wasGeneratedBy"] = {"@id": "#export"}
 
-        if any(v is not None for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]):
+        if any(
+            v is not None
+            for v in [self.lat_min, self.lat_max, self.lon_min, self.lon_max]
+        ):
             self.crate.root_dataset["spatialCoverage"] = {
                 "@id": "#spatial-coverage",
                 "@type": "Place",
                 "geo": {
                     "@id": "#spatial-coverage-geo",
                     "@type": "GeoShape",
-                    "box": f"{self.lat_min} {self.lon_min} {self.lat_max} {self.lon_max}",
+                    "box": (
+                        f"{self.lat_min} {self.lon_min} "
+                        f"{self.lat_max} {self.lon_max}"
+                    ),
                 },
             }
 
@@ -274,34 +405,62 @@ class CrateBuilder:
             "includeGenomes": self.include_genomes,
         }
         if self.include_samples:
-            if self.source_dataset:        filters["sourceDataset"]  = self.source_dataset
-            if self.ontology:              filters["ontology"]       = self.ontology
-            if self.lat_min is not None:   filters["latMin"]         = self.lat_min
-            if self.lat_max is not None:   filters["latMax"]         = self.lat_max
-            if self.lon_min is not None:   filters["lonMin"]         = self.lon_min
-            if self.lon_max is not None:   filters["lonMax"]         = self.lon_max
-            if self.release_label:         filters["releaseLabel"]   = self.release_label
+            if self.source_dataset:
+                filters["sourceDataset"] = self.source_dataset
+            if self.ontology:
+                filters["ontology"] = self.ontology
+            if self.lat_min is not None:
+                filters["latMin"] = self.lat_min
+            if self.lat_max is not None:
+                filters["latMax"] = self.lat_max
+            if self.lon_min is not None:
+                filters["lonMin"] = self.lon_min
+            if self.lon_max is not None:
+                filters["lonMax"] = self.lon_max
+            if self.near_lat is not None:
+                filters["nearLat"] = self.near_lat
+            if self.near_lon is not None:
+                filters["nearLon"] = self.near_lon
+            if self.radius_km is not None:
+                filters["radiusKm"] = self.radius_km
+            if self.country_code:
+                filters["countryCode"] = self.country_code.upper()
+            if self.polygon:
+                filters["polygon"] = self.polygon
+            if self.release_label:
+                filters["releaseLabel"] = self.release_label
             filters["includeRuns"] = self.include_runs
         if self.include_genomes:
-            if self.genome_release_label:          filters["genomeReleaseLabel"] = self.genome_release_label
-            if self.min_completeness is not None:  filters["minCompleteness"]   = self.min_completeness
-            if self.max_contamination is not None: filters["maxContamination"]  = self.max_contamination
+            if self.genome_release_label:
+                filters["genomeReleaseLabel"] = self.genome_release_label
+            if self.min_completeness is not None:
+                filters["minCompleteness"] = self.min_completeness
+            if self.max_contamination is not None:
+                filters["maxContamination"] = self.max_contamination
         if self.link_via_abundance:
             filters["linkViaAbundance"] = True
-            filters["minAbundance"]     = self.min_abundance
+            filters["minAbundance"] = self.min_abundance
         self.crate.root_dataset["exportFilters"] = filters
 
         effective_release = self.release_label or self.genome_release_label
         if effective_release:
             self._ensure_release_entity(effective_release)
-            self.crate.root_dataset["isPartOf"] = {"@id": f"#release-{effective_release}"}
+            self.crate.root_dataset["isPartOf"] = {
+                "@id": f"#release-{effective_release}"
+            }
 
     def _add_cartogenomics_db_entity(self):
-        self.crate.add(ContextEntity(self.crate, "#cartogenomics-db", properties={
-            "@type": "SoftwareApplication",
-            "name": "Cartogenomics DB",
-            "url": "https://github.com/meeg-aau/cartogenomics",
-        }))
+        self.crate.add(
+            ContextEntity(
+                self.crate,
+                "#cartogenomics-db",
+                properties={
+                    "@type": "SoftwareApplication",
+                    "name": "Cartogenomics DB",
+                    "url": "https://github.com/meeg-aau/cartogenomics",
+                },
+            )
+        )
 
     def _add_export_action(self):
         description_parts = []
@@ -310,14 +469,24 @@ class CrateBuilder:
         if self.genomes:
             description_parts.append(f"{len(self.genomes)} genomes")
 
-        self.crate.add(ContextEntity(self.crate, "#export", properties={
-            "@type": "CreateAction",
-            "name": "Cartogenomics RO-Crate export",
-            "description": ("Export of " + ", ".join(description_parts)) if description_parts else "Cartogenomics export",
-            "endTime": _fmt_date(datetime.now(timezone.utc)),
-            "instrument": {"@id": "#cartogenomics-db"},
-            "result": {"@id": "./"},
-        }))
+        self.crate.add(
+            ContextEntity(
+                self.crate,
+                "#export",
+                properties={
+                    "@type": "CreateAction",
+                    "name": "Cartogenomics RO-Crate export",
+                    "description": (
+                        ("Export of " + ", ".join(description_parts))
+                        if description_parts
+                        else "Cartogenomics export"
+                    ),
+                    "endTime": _fmt_date(datetime.now(timezone.utc)),
+                    "instrument": {"@id": "#cartogenomics-db"},
+                    "result": {"@id": "./"},
+                },
+            )
+        )
 
     # -----------------------------------------------------------------------
     # Provenance entities
@@ -325,7 +494,11 @@ class CrateBuilder:
 
     @staticmethod
     def _ingest_entity_id(ingest) -> str:
-        slug = f"{ingest.source_system}-{ingest.data_type}-{ingest.label}".lower().replace(" ", "-")
+        slug = (
+            f"{ingest.source_system}-{ingest.data_type}-{ingest.label}".lower().replace(
+                " ", "-"
+            )
+        )
         return f"#ingest-{slug}"
 
     @staticmethod
@@ -337,10 +510,16 @@ class CrateBuilder:
         if self.crate.get(ingest_id):
             return
 
-        properties = {"@type": "CreateAction",
-                      "name": f"{ingest.source_system} {ingest.data_type.lower().replace('_', ' ')} ingest",
-                      "description": ingest.label, "object": {"@id": ingest.source_system},
-                      "endTime": _fmt_date(ingest.ingested_on)}
+        properties = {
+            "@type": "CreateAction",
+            "name": (
+                f"{ingest.source_system} "
+                f"{ingest.data_type.lower().replace('_', ' ')} ingest"
+            ),
+            "description": ingest.label,
+            "object": {"@id": ingest.source_system},
+            "endTime": _fmt_date(ingest.ingested_on),
+        }
 
         if ingest.upstream_version:
             properties["version"] = ingest.upstream_version
@@ -349,10 +528,14 @@ class CrateBuilder:
 
         if ingest.pipeline_version:
             self._ensure_pipeline_entity(ingest.pipeline_version)
-            properties["instrument"] = {"@id": self._pipeline_entity_id(ingest.pipeline_version)}
+            properties["instrument"] = {
+                "@id": self._pipeline_entity_id(ingest.pipeline_version)
+            }
 
         if ingest.release:
-            self._ensure_release_entity(ingest.release.label, release_obj=ingest.release)
+            self._ensure_release_entity(
+                ingest.release.label, release_obj=ingest.release
+            )
             properties["isPartOf"] = {"@id": f"#release-{ingest.release.label}"}
 
         self.crate.add(ContextEntity(self.crate, ingest_id, properties=properties))
@@ -366,11 +549,17 @@ class CrateBuilder:
         name = parts[0] if len(parts) == 2 else pipeline_version
         version = parts[1] if len(parts) == 2 else None
 
-        self.crate.add(ContextEntity(self.crate, pipeline_id, properties={
-            "@type": "SoftwareApplication",
-            "name": name,
-            "softwareVersion": version or pipeline_version,
-        }))
+        self.crate.add(
+            ContextEntity(
+                self.crate,
+                pipeline_id,
+                properties={
+                    "@type": "SoftwareApplication",
+                    "name": name,
+                    "softwareVersion": version or pipeline_version,
+                },
+            )
+        )
 
     def _ensure_release_entity(self, release_label: str, release_obj=None) -> None:
         release_id = f"#release-{release_label}"
@@ -503,6 +692,7 @@ class CrateBuilder:
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
 
 def _fmt_date(value) -> str | None:
     if value is None:

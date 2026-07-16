@@ -12,10 +12,10 @@ import json
 import os
 from datetime import date
 
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def generate_preview(crate_dir: str) -> None:
     meta_path = os.path.join(crate_dir, "ro-crate-metadata.json")
@@ -26,22 +26,41 @@ def generate_preview(crate_dir: str) -> None:
     root = graph.get("./", {})
 
     entities = list(graph.values())
-    samples   = [e for e in entities if _has_type(e, "BioSample")]
-    runs      = [e for e in entities if _has_type(e, "Dataset") and e["@id"].startswith("#run-")]
-    genomes   = [e for e in entities if e["@id"].startswith("#genome-")]
-    files     = [e for e in entities if _is_file(e)]
-    actions   = [e for e in entities if _has_type(e, "CreateAction")]
+    samples = [e for e in entities if _has_type(e, "BioSample")]
+    runs = [
+        e for e in entities if _has_type(e, "Dataset") and e["@id"].startswith("#run-")
+    ]
+    genomes = [e for e in entities if e["@id"].startswith("#genome-")]
+    files = [e for e in entities if _is_file(e)]
+    actions = [e for e in entities if _has_type(e, "CreateAction")]
     pipelines = [e for e in entities if _has_type(e, "SoftwareApplication")]
-    releases  = [e for e in entities if _has_type(e, "schema:Dataset") or (
-                  _has_type(e, "Dataset") and e["@id"].startswith("#release-"))]
+    releases = [
+        e
+        for e in entities
+        if _has_type(e, "schema:Dataset")
+        or (_has_type(e, "Dataset") and e["@id"].startswith("#release-"))
+    ]
 
     try:
         from django.conf import settings
+
         abundance_file = getattr(settings, "ABUNDANCE_FILE", None)
     except Exception:
         abundance_file = None
 
-    html = _render(root, graph, samples, runs, genomes, files, actions, pipelines, releases, metadata, abundance_file)
+    html = _render(
+        root,
+        graph,
+        samples,
+        runs,
+        genomes,
+        files,
+        actions,
+        pipelines,
+        releases,
+        metadata,
+        abundance_file,
+    )
 
     out_path = os.path.join(crate_dir, "ro-crate-preview.html")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -51,6 +70,7 @@ def generate_preview(crate_dir: str) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _has_type(entity: dict, type_str: str) -> bool:
     t = entity.get("@type", [])
@@ -67,15 +87,24 @@ def _is_file(entity: dict) -> bool:
 
 
 def _pill(entity_id: str) -> str:
-    if entity_id.startswith("#sample-"):   return "pill-sample",  "Sample"
-    if entity_id.startswith("#run-"):      return "pill-run",     "Run"
-    if entity_id.startswith("#genome-"):   return "pill-genome",  "Genome"
-    if entity_id.startswith("#release-"):  return "pill-release", "Release"
-    if entity_id.startswith("#ingest-"):   return "pill-action",  "Ingest"
-    if entity_id.startswith("#pipeline-"): return "pill-software","Pipeline"
-    if entity_id.startswith("#export"):    return "pill-action",  "Export"
-    if entity_id == "./":                  return "pill-root",    "Root"
-    if entity_id.startswith("http"):       return "pill-file",    "File"
+    if entity_id.startswith("#sample-"):
+        return "pill-sample", "Sample"
+    if entity_id.startswith("#run-"):
+        return "pill-run", "Run"
+    if entity_id.startswith("#genome-"):
+        return "pill-genome", "Genome"
+    if entity_id.startswith("#release-"):
+        return "pill-release", "Release"
+    if entity_id.startswith("#ingest-"):
+        return "pill-action", "Ingest"
+    if entity_id.startswith("#pipeline-"):
+        return "pill-software", "Pipeline"
+    if entity_id.startswith("#export"):
+        return "pill-action", "Export"
+    if entity_id == "./":
+        return "pill-root", "Root"
+    if entity_id.startswith("http"):
+        return "pill-file", "File"
     return "pill-root", "Entity"
 
 
@@ -93,7 +122,7 @@ def _fmt_val(v, graph: dict) -> str:
     if isinstance(v, list):
         parts = [_fmt_val(i, graph) for i in v]
         return ", ".join(parts)
-    return f'<code>{_esc(str(v))}</code>'
+    return f"<code>{_esc(str(v))}</code>"
 
 
 def _esc(s: str) -> str:
@@ -106,9 +135,7 @@ def _prop_table(entity: dict, graph: dict, skip: set | None = None) -> str:
     for k, v in entity.items():
         if k in skip:
             continue
-        rows.append(
-            f'<tr><td>{_esc(k)}</td><td>{_fmt_val(v, graph)}</td></tr>'
-        )
+        rows.append(f"<tr><td>{_esc(k)}</td><td>{_fmt_val(v, graph)}</td></tr>")
     if not rows:
         return '<p style="color:var(--muted);font-size:12px;padding:8px 0">No properties.</p>'
     return f'<table class="prop-table">{"".join(rows)}</table>'
@@ -140,25 +167,35 @@ def _entity_card(entity: dict, graph: dict, extra_header: str = "") -> str:
 # Section renderers
 # ---------------------------------------------------------------------------
 
-def _sec_overview(root: dict, samples, runs, genomes, files, actions, pipelines, releases) -> str:
+
+def _sec_overview(
+    root: dict, samples, runs, genomes, files, actions, pipelines, releases
+) -> str:
     name = root.get("name", "Cartogenomics Export")
     desc = root.get("description", "")
-    pub  = root.get("datePublished", str(date.today()))
-    release_ids = [r["@id"].replace("#release-", "") for r in releases if r["@id"].startswith("#release-")]
+    pub = root.get("datePublished", str(date.today()))
+    release_ids = [
+        r["@id"].replace("#release-", "")
+        for r in releases
+        if r["@id"].startswith("#release-")
+    ]
     release_str = ", ".join(release_ids) if release_ids else "—"
 
     cards = [
-        ("Samples",   len(samples),   "c-green",  "🧪"),
-        ("Runs",      len(runs),      "c-blue",   "🔬"),
-        ("Genomes",   len(genomes),   "c-purple", "🧬"),
-        ("Files",     len(files),     "c-teal",   "📂"),
-        ("Ingests",   len([a for a in actions if a["@id"] != "#export"]), "c-amber", "⚙️"),
+        ("Samples", len(samples), "c-green", "🧪"),
+        ("Runs", len(runs), "c-blue", "🔬"),
+        ("Genomes", len(genomes), "c-purple", "🧬"),
+        ("Files", len(files), "c-teal", "📂"),
+        ("Ingests", len([a for a in actions if a["@id"] != "#export"]), "c-amber", "⚙️"),
     ]
-    stat_html = "".join(f"""
+    stat_html = "".join(
+        f"""
       <div class="stat-card">
         <div class="label">{icon} {label}</div>
         <div class="value {cls}">{count}</div>
-      </div>""" for label, count, cls, icon in cards)
+      </div>"""
+        for label, count, cls, icon in cards
+    )
 
     return f"""
 <div class="section-heading">
@@ -188,9 +225,12 @@ def _filter_summary(root: dict) -> str:
     # Sample filters
     if f.get("includeSamples"):
         rows = []
-        if f.get("sourceDataset"):   rows.append(row("Source dataset", f["sourceDataset"]))
-        if f.get("releaseLabel"):     rows.append(row("Release", f["releaseLabel"]))
-        if f.get("ontology"):         rows.append(row("Biome / ontology", f["ontology"]))
+        if f.get("sourceDataset"):
+            rows.append(row("Source dataset", f["sourceDataset"]))
+        if f.get("releaseLabel"):
+            rows.append(row("Release", f["releaseLabel"]))
+        if f.get("ontology"):
+            rows.append(row("Biome / ontology", f["ontology"]))
         has_bbox = any(k in f for k in ("latMin", "latMax", "lonMin", "lonMax"))
         if has_bbox:
             bbox = (
@@ -200,31 +240,52 @@ def _filter_summary(root: dict) -> str:
             rows.append(row("Bounding box", bbox))
         runs_str = "included" if f.get("includeRuns", True) else "excluded"
         rows.append(row("Sequencing runs", runs_str))
-        if not any(f.get(k) for k in ("sourceDataset", "releaseLabel", "ontology")) and not has_bbox:
-            rows.insert(0, f'<tr><td colspan="2" class="fs-none">No sample filters — all samples included</td></tr>')
+        if (
+            not any(f.get(k) for k in ("sourceDataset", "releaseLabel", "ontology"))
+            and not has_bbox
+        ):
+            rows.insert(
+                0,
+                '<tr><td colspan="2" class="fs-none">No sample filters — all samples included</td></tr>',
+            )
         table = f'<table class="fs-table">{"".join(rows)}</table>'
-        sections.append(f'<div class="fs-section"><div class="fs-heading">{badge("Samples", "badge-sample")} Filters</div>{table}</div>')
+        sections.append(
+            f'<div class="fs-section"><div class="fs-heading">{badge("Samples", "badge-sample")} Filters</div>{table}</div>'
+        )
 
     # Genome filters
     if f.get("includeGenomes"):
         rows = []
-        if f.get("genomeReleaseLabel"):  rows.append(row("Release", f["genomeReleaseLabel"]))
-        if f.get("minCompleteness") is not None: rows.append(row("Min completeness", f'{f["minCompleteness"]}%'))
-        if f.get("maxContamination") is not None: rows.append(row("Max contamination", f'{f["maxContamination"]}%'))
+        if f.get("genomeReleaseLabel"):
+            rows.append(row("Release", f["genomeReleaseLabel"]))
+        if f.get("minCompleteness") is not None:
+            rows.append(row("Min completeness", f'{f["minCompleteness"]}%'))
+        if f.get("maxContamination") is not None:
+            rows.append(row("Max contamination", f'{f["maxContamination"]}%'))
         if not rows:
-            rows.append(f'<tr><td colspan="2" class="fs-none">No genome filters — all genomes included</td></tr>')
+            rows.append(
+                '<tr><td colspan="2" class="fs-none">No genome filters — all genomes included</td></tr>'
+            )
         table = f'<table class="fs-table">{"".join(rows)}</table>'
-        sections.append(f'<div class="fs-section"><div class="fs-heading">{badge("Genomes", "badge-genome")} Filters</div>{table}</div>')
+        sections.append(
+            f'<div class="fs-section"><div class="fs-heading">{badge("Genomes", "badge-genome")} Filters</div>{table}</div>'
+        )
 
     # Abundance
     if f.get("linkViaAbundance"):
         direction = f.get("abundanceDirection", "samples_to_genomes")
-        dir_label = "Samples → Genomes" if direction == "samples_to_genomes" else "Genomes → Samples"
+        dir_label = (
+            "Samples → Genomes"
+            if direction == "samples_to_genomes"
+            else "Genomes → Samples"
+        )
         threshold = f.get("minAbundance", 0.0)
         threshold_str = str(threshold) if threshold else "0.0 (any detection)"
         rows = [row("Direction", dir_label), row("Min abundance", threshold_str)]
         table = f'<table class="fs-table">{"".join(rows)}</table>'
-        sections.append(f'<div class="fs-section"><div class="fs-heading">{badge("Abundance", "badge-abundance")} Cross-filter</div>{table}</div>')
+        sections.append(
+            f'<div class="fs-section"><div class="fs-heading">{badge("Abundance", "badge-abundance")} Cross-filter</div>{table}</div>'
+        )
 
     if not sections:
         return ""
@@ -265,10 +326,12 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
         return '<p style="color:var(--muted)">DuckDB not installed — cannot read abundance data.</p>'
 
     genome_accessions = [g["@id"].replace("#genome-", "") for g in genomes]
-    genome_taxonomy   = {g["@id"].replace("#genome-", ""): g.get("taxonomicRange", "") for g in genomes}
+    genome_taxonomy = {
+        g["@id"].replace("#genome-", ""): g.get("taxonomicRange", "") for g in genomes
+    }
 
     run_accessions = [r["@id"].replace("#run-", "") for r in runs]
-    run_to_sample  = {}
+    run_to_sample = {}
     for r in runs:
         acc = r["@id"].replace("#run-", "")
         ref = r.get("sample", {})
@@ -279,7 +342,7 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
     for s in samples:
         bs = s.get("name", "")
         sample_meta[bs] = {
-            "region":   s.get("addressRegion", ""),
+            "region": s.get("addressRegion", ""),
             "locality": s.get("addressLocality", ""),
             "lat": s.get("latitude"),
             "lon": s.get("longitude"),
@@ -287,19 +350,23 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
 
     con = duckdb.connect()
     try:
-        parquet_cols = {row[0] for row in con.execute(
-            f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
-        ).fetchall()}
-        matching_runs    = [r for r in run_accessions    if r in parquet_cols]
+        parquet_cols = {
+            row[0]
+            for row in con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{abundance_file}') LIMIT 0"
+            ).fetchall()
+        }
+        matching_runs = [r for r in run_accessions if r in parquet_cols]
         matching_genomes = [g for g in genome_accessions if True]
 
         if not matching_runs:
             return '<p style="color:var(--muted)">No run accessions in this export matched the abundance Parquet columns.</p>'
 
-        col_select  = ", ".join(f'"{r}"' for r in matching_runs)
+        col_select = ", ".join(f'"{r}"' for r in matching_runs)
         genome_list = ", ".join(f"'{g}'" for g in matching_genomes)
 
-        rows = con.execute(f"""
+        rows = con.execute(
+            f"""
             WITH long AS (
                 UNPIVOT (
                     SELECT genome_id, {col_select}
@@ -312,7 +379,8 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
             SELECT genome_id, run_id, abundance
             FROM long
             WHERE abundance > 0
-        """).fetchall()
+        """
+        ).fetchall()
     finally:
         con.close()
 
@@ -325,27 +393,31 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
         if pct > sample_abund[bs].get(genome_id, 0):
             sample_abund[bs][genome_id] = pct
 
-    js_samples = json.dumps([
-        {
-            "id":       bs,
-            "region":   sample_meta.get(bs, {}).get("region", ""),
-            "locality": sample_meta.get(bs, {}).get("locality", ""),
-            "lat":      sample_meta.get(bs, {}).get("lat"),
-            "lon":      sample_meta.get(bs, {}).get("lon"),
-            "abund":    sample_abund.get(bs, {}),
-        }
-        for bs in sample_meta
-    ])
-    js_genomes = json.dumps([
-        {"id": acc, "taxonomy": genome_taxonomy.get(acc, "")}
-        for acc in genome_accessions
-    ])
+    js_samples = json.dumps(
+        [
+            {
+                "id": bs,
+                "region": sample_meta.get(bs, {}).get("region", ""),
+                "locality": sample_meta.get(bs, {}).get("locality", ""),
+                "lat": sample_meta.get(bs, {}).get("lat"),
+                "lon": sample_meta.get(bs, {}).get("lon"),
+                "abund": sample_abund.get(bs, {}),
+            }
+            for bs in sample_meta
+        ]
+    )
+    js_genomes = json.dumps(
+        [
+            {"id": acc, "taxonomy": genome_taxonomy.get(acc, "")}
+            for acc in genome_accessions
+        ]
+    )
 
     genome_headers = "".join(
         f'<th style="padding:6px 10px;border-bottom:1px solid var(--border);color:var(--purple);'
-        f'text-align:center;white-space:nowrap;font-size:11px;writing-mode:vertical-rl;'
+        f"text-align:center;white-space:nowrap;font-size:11px;writing-mode:vertical-rl;"
         f'transform:rotate(180deg);max-height:120px;" title="{_esc(genome_taxonomy.get(acc,""))}">'
-        f'{_esc(acc)}</th>'
+        f"{_esc(acc)}</th>"
         for acc in genome_accessions
     )
 
@@ -422,17 +494,38 @@ def _sec_jsonld(metadata: dict) -> str:
 # Full HTML renderer
 # ---------------------------------------------------------------------------
 
-def _render(root, graph, samples, runs, genomes, files, actions, pipelines, releases, metadata, abundance_file=None) -> str:
+
+def _render(
+    root,
+    graph,
+    samples,
+    runs,
+    genomes,
+    files,
+    actions,
+    pipelines,
+    releases,
+    metadata,
+    abundance_file=None,
+) -> str:
     name = root.get("name", "Cartogenomics Export")
-    pub  = root.get("datePublished", str(date.today()))
-    release_ids = [r["@id"].replace("#release-", "") for r in releases if r["@id"].startswith("#release-")]
+    pub = root.get("datePublished", str(date.today()))
+    release_ids = [
+        r["@id"].replace("#release-", "")
+        for r in releases
+        if r["@id"].startswith("#release-")
+    ]
     release_str = ", ".join(release_ids) if release_ids else "—"
 
     summary_parts = []
-    if samples:  summary_parts.append(f"{len(samples)} samples")
-    if runs:     summary_parts.append(f"{len(runs)} runs")
-    if genomes:  summary_parts.append(f"{len(genomes)} genomes")
-    if files:    summary_parts.append(f"{len(files)} files")
+    if samples:
+        summary_parts.append(f"{len(samples)} samples")
+    if runs:
+        summary_parts.append(f"{len(runs)} runs")
+    if genomes:
+        summary_parts.append(f"{len(genomes)} genomes")
+    if files:
+        summary_parts.append(f"{len(files)} files")
     summary_str = " · ".join(summary_parts) or "empty crate"
 
     export_action = graph.get("#export", {})

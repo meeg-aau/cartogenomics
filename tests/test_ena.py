@@ -1,6 +1,6 @@
-import unittest
 import logging
 import sys
+import unittest
 from unittest.mock import patch
 
 from api_fetch.ena import ENAClient, get_accession_type
@@ -75,20 +75,27 @@ class TestGetAllRunAccessions(unittest.TestCase):
 
     @patch("api_fetch.ena.ENAClient.get_request")
     def test_biosample_in_secondary_field(self, mock_get):
-        logging.info("\nTesting get_all_run_accessions with biosample in secondary_sample_accession")
-        mock_get.return_value = [{
-            "run_accession": "ERR123456",
-            "experiment_accession": "ERX123456",
-            "sample_accession": "ERS654321",
-            "secondary_sample_accession": "SAMEA654321",
-        }]
+        logging.info(
+            "\nTesting get_all_run_accessions with biosample in "
+            "secondary_sample_accession"
+        )
+        mock_get.return_value = [
+            {
+                "run_accession": "ERR123456",
+                "experiment_accession": "ERX123456",
+                "sample_accession": "ERS654321",
+                "secondary_sample_accession": "SAMEA654321",
+            }
+        ]
         result = self.client.get_all_run_accessions("ERR123456")
         assert result[0]["biosample"] == "SAMEA654321"
         assert result[0]["ena_sample"] == "ERS654321"
 
     @patch("api_fetch.ena.ENAClient.get_request")
     def test_multiple_runs_returned(self, mock_get):
-        logging.info("\nTesting get_all_run_accessions returns all runs for a biosample")
+        logging.info(
+            "\nTesting get_all_run_accessions returns all runs for a biosample"
+        )
         mock_get.return_value = [
             {**MOCK_RUN_RECORD, "run_accession": "ERR111111"},
             {**MOCK_RUN_RECORD, "run_accession": "ERR222222"},

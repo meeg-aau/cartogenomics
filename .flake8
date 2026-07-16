@@ -1,0 +1,9 @@
+[flake8]
+max-line-length = 88
+extend-ignore = E203
+exclude = .git,__pycache__,build,dist,*/migrations/*
+
+# HTML-generation code with long embedded markup/CSS lines - wrapping these
+# for an 88-char limit would hurt readability more than it helps
+per-file-ignores =
+    rocrates/preview.py:E501

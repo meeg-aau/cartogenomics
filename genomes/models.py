@@ -1,4 +1,5 @@
 from django.db import models
+
 from versions.models import IngestVersion
 
 
@@ -20,7 +21,9 @@ class Genome(models.Model):
 
     completeness = models.FloatField(null=True, blank=True)
     contamination = models.FloatField(null=True, blank=True)
-    completeness_software = models.CharField(max_length=50, default="", choices=CompletenessSoftware.choices)
+    completeness_software = models.CharField(
+        max_length=50, default="", choices=CompletenessSoftware.choices
+    )
 
     genome_size = models.BigIntegerField(null=True, blank=True)
     n50 = models.BigIntegerField(null=True, blank=True)
@@ -37,7 +40,8 @@ class Genome(models.Model):
 
 
 class GenomeVersion(models.Model):
-    """Immutable snapshot of a Genome's curated fields at each ingest where fields changed."""
+    """Immutable snapshot of a Genome's curated fields at each ingest where
+    fields changed."""
 
     genome = models.ForeignKey(
         Genome,

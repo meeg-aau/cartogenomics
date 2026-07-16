@@ -6,20 +6,40 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('external', '0004_externalresource_externalresource_has_only_one_target'),
-        ('genomes', '0001_initial'),
-        ('runs', '0001_initial'),
-        ('samples', '0006_rename_qc_software_sample_completeness_software'),
-        ('versions', '0009_remove_ingestversion_query'),
+        ("external", "0004_externalresource_externalresource_has_only_one_target"),
+        ("genomes", "0001_initial"),
+        ("runs", "0001_initial"),
+        ("samples", "0006_rename_qc_software_sample_completeness_software"),
+        ("versions", "0009_remove_ingestversion_query"),
     ]
 
     operations = [
         migrations.RemoveConstraint(
-            model_name='externalresource',
-            name='externalresource_has_only_one_target',
+            model_name="externalresource",
+            name="externalresource_has_only_one_target",
         ),
         migrations.AddConstraint(
-            model_name='externalresource',
-            constraint=models.CheckConstraint(condition=models.Q(models.Q(('sample__isnull', False), ('run__isnull', True), ('genome__isnull', True)), models.Q(('sample__isnull', True), ('run__isnull', False), ('genome__isnull', True)), models.Q(('sample__isnull', True), ('run__isnull', True), ('genome__isnull', False)), _connector='OR'), name='externalresource_has_only_one_target'),
+            model_name="externalresource",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(
+                        ("sample__isnull", False),
+                        ("run__isnull", True),
+                        ("genome__isnull", True),
+                    ),
+                    models.Q(
+                        ("sample__isnull", True),
+                        ("run__isnull", False),
+                        ("genome__isnull", True),
+                    ),
+                    models.Q(
+                        ("sample__isnull", True),
+                        ("run__isnull", True),
+                        ("genome__isnull", False),
+                    ),
+                    _connector="OR",
+                ),
+                name="externalresource_has_only_one_target",
+            ),
         ),
     ]

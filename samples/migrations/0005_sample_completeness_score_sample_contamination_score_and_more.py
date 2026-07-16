@@ -6,23 +6,23 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('samples', '0004_rename_version_sample_ingest'),
+        ("samples", "0004_rename_version_sample_ingest"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='sample',
-            name='completeness_score',
+            model_name="sample",
+            name="completeness_score",
             field=models.FloatField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='sample',
-            name='contamination_score',
+            model_name="sample",
+            name="contamination_score",
             field=models.FloatField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='sample',
-            name='qc_software',
+            model_name="sample",
+            name="qc_software",
             field=models.CharField(blank=True, max_length=100, null=True),
         ),
     ]

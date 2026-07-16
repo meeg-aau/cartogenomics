@@ -1,4 +1,5 @@
 import uuid
+
 from django.db import models
 
 
@@ -10,7 +11,9 @@ class ExportJob(models.Model):
         FAILED = "failed", "Failed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
     params = models.JSONField()
     output_path = models.CharField(max_length=500, blank=True)
     error = models.TextField(blank=True)

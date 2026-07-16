@@ -1,21 +1,24 @@
 import logging
+from pathlib import Path
 
+from django.conf import settings
+from django.contrib.gis.geos import Point
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
-
-from versions.models import IngestVersion, CartogenomicsRelease
-from samples.models import Sample, SampleVersion
-from runs.models import Run
-from external.models import ExternalResource
+from sample_metadata_curation.curate import curate_biosample
 
 from api_fetch import parse_iso_date
-from api_fetch.biosamples import get_basic_sample_data, BASE_URL
+from api_fetch.biosamples import BASE_URL, get_basic_sample_data
 from api_fetch.ena import ENAClient
-from sample_metadata_curation.curate import curate_biosample
+from external.models import ExternalResource
+from runs.models import Run
+from samples.models import Sample, SampleVersion
+from versions.models import CartogenomicsRelease, IngestVersion
 
 logger = logging.getLogger(__name__)
 ena_api = ENAClient()
+
 
 class Command(BaseCommand):
     help = "Fetch BioSample JSON, curate it, and add it into the Sample table."
@@ -47,7 +50,10 @@ class Command(BaseCommand):
             "-pv",
             type=str,
             default="sample_metadata_curation 0.1.0",
-            help='Pipeline version used for curation or processing, e.g. "sample_metadata_curation 0.1.0"',
+            help=(
+                "Pipeline version used for curation or processing, "
+                'e.g. "sample_metadata_curation 0.1.0"'
+            ),
         )
         parser.add_argument(
             "--release-label",
@@ -84,7 +90,10 @@ class Command(BaseCommand):
 
         biosample_acc = runs_data[0].get("biosample") if runs_data else None
         ena_sample_acc = runs_data[0].get("ena_sample") if runs_data else None
-        logger.info(f"Resolved accessions: biosample={biosample_acc} ena_sample={ena_sample_acc}")
+        logger.info(
+            f"Resolved accessions: biosample={biosample_acc} "
+            f"ena_sample={ena_sample_acc}"
+        )
 
         fetch_acc = biosample_acc or ena_sample_acc
         if not fetch_acc:
@@ -114,9 +123,19 @@ class Command(BaseCommand):
             defaults={
                 "pipeline_version": pipeline_version,
                 "release": release,
-            }
+            },
         )
-        logger.debug(f"IngestVersion id={version.pk} label={version.label} ({'Created' if version_created else 'Using existing'})")
+        logger.debug(
+            f"IngestVersion id={version.pk} label={version.label} "
+            f"({'Created' if version_created else 'Using existing'})"
+        )
+
+        #   use whatever ingest_country_boundaries most recently downloaded,
+        #   so sample curation and the CountryBoundary table are checked
+        #   against the same Natural Earth release; fall back to whatever
+        #   sample_metadata_curation has bundled if that hasn't run yet
+        ne_zip_path = Path(settings.NATURAL_EARTH_ZIP_PATH)
+        natural_earth_zip = ne_zip_path if ne_zip_path.exists() else None
 
         logger.info(f"Curating metadata for {fetch_acc}")
         try:
@@ -131,11 +150,10 @@ class Command(BaseCommand):
                         "04_mfd_hab2",
                         "05_mfd_hab3",
                     ],
+                    natural_earth_zip=natural_earth_zip,
                 )
             else:
-                curated = curate_biosample(
-                    raw
-                )
+                curated = curate_biosample(raw, natural_earth_zip=natural_earth_zip)
         except Exception as e:
             raise CommandError(f"Failed to curate BioSample {fetch_acc}: {e}")
 
@@ -149,21 +167,39 @@ class Command(BaseCommand):
                 f"Could not determine a lookup key for Sample from {accession}"
             )
 
+        lat = curated.get("latitude")
+        lon = curated.get("longitude")
+        location = (
+            Point(lon, lat, srid=4326) if lat is not None and lon is not None else None
+        )
+
+        #   reverse (polygon-derived) code is the geometric ground truth and matches
+        #   CountryBoundary.iso_a2; only fall back to the reported code when there
+        #   were no coordinates to reverse-geocode (e.g. ocean samples)
+        inferred_country_code = curated.get("reverse_country_code") or curated.get(
+            "reported_country_code"
+        )
+
         curated_defaults = {
             "biosample": biosample_acc,
             "ena_sample": ena_sample_acc,
             "source_dataset": source_dataset,
-            "latitude": curated.get("latitude"),
-            "longitude": curated.get("longitude"),
+            "latitude": lat,
+            "longitude": lon,
+            "location": location,
             "region": curated.get("region"),
             "locality": curated.get("locality"),
             "geography_check_status": curated.get("geo_check_status"),
             "geography_status_reason": curated.get("geo_check_reason"),
+            "inferred_country_code": inferred_country_code,
+            "coordinates_reversed": curated.get("coordinates_reversed"),
+            "coord_precision_deg": curated.get("coord_precision_deg"),
             "ontology": curated.get("biome"),
             "raw_metadata": curated,
         }
 
-        #   keep this separate so it does not influence the changed fields and version table
+        #   keep this separate so it does not influence the changed fields
+        #   and version table
         sample_archive = {
             "archive_created": biosample_first_created,
             "archive_updated": biosample_last_updated,
@@ -174,16 +210,19 @@ class Command(BaseCommand):
         try:
             existing = Sample.objects.get(**lookup)
             changed_fields = [
-                field for field, value in curated_defaults.items()
+                field
+                for field, value in curated_defaults.items()
                 if getattr(existing, field) != value
             ]
             if changed_fields:
                 logger.info(
-                    f"Sample {fetch_acc} already exists (id={existing.pk}) - {len(changed_fields)} field(s) changed"
+                    f"Sample {fetch_acc} already exists (id={existing.pk}) - "
+                    f"{len(changed_fields)} field(s) changed"
                 )
             else:
                 logger.info(
-                    f"Sample {fetch_acc} already exists (id={existing.pk}) and no fields have changed."
+                    f"Sample {fetch_acc} already exists (id={existing.pk}) "
+                    "and no fields have changed."
                 )
         except Sample.DoesNotExist:
             logger.info(f"Sample {fetch_acc} not found in DB - will be created.")
@@ -196,7 +235,9 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to create/update Sample for {accession}: {e}")
 
-        logger.info(f"Sample id:{sample.pk} ({sample}) ({'Created' if created else 'Updated'})")
+        logger.info(
+            f"Sample id:{sample.pk} ({sample}) ({'Created' if created else 'Updated'})"
+        )
 
         now = timezone.now()
         if created:
@@ -207,9 +248,12 @@ class Command(BaseCommand):
                 valid_to=None,
                 **curated_defaults,
             )
-        #   grab current valid version, set end date to now, open new version from now to keep provenance
+        #   grab current valid version, set end date to now, open new
+        #   version from now to keep provenance
         elif changed_fields:
-            SampleVersion.objects.filter(sample=sample, valid_to__isnull=True).update(valid_to=now)
+            SampleVersion.objects.filter(sample=sample, valid_to__isnull=True).update(
+                valid_to=now
+            )
             SampleVersion.objects.create(
                 sample=sample,
                 ingest=version,
@@ -225,7 +269,8 @@ class Command(BaseCommand):
                 accession=sample.biosample,
                 ingest=version,
                 defaults={
-                    "url": f"{BASE_URL}/{sample.biosample}.json", #  is hardcoding the best way to do this?
+                    # is hardcoding the best way to do this?
+                    "url": f"{BASE_URL}/{sample.biosample}.json",
                     "sample": sample,
                     "run": None,
                     "genome": None,
@@ -234,7 +279,9 @@ class Command(BaseCommand):
                 },
             )
         except Exception as e:
-            raise CommandError(f"Failed to create/update ExternalResource for {accession}: {e}")
+            raise CommandError(
+                f"Failed to create/update ExternalResource for {accession}: {e}"
+            )
 
         logger.info(f"Ingest complete for {fetch_acc}")
 
@@ -261,7 +308,8 @@ class Command(BaseCommand):
                 run_curated = {
                     "sample": sample,
                     "read_count": run_item.get("read_count"),
-                    "sequencer": run_item.get("instrument_model") or run_item.get("instrument_platform"),
+                    "sequencer": run_item.get("instrument_model")
+                    or run_item.get("instrument_platform"),
                     "library_source": run_item.get("library_source"),
                     "library_strategy": run_item.get("library_strategy"),
                     "archive_created": ena_first_created,
@@ -277,7 +325,11 @@ class Command(BaseCommand):
                     ftp_path = ftp_path.strip()
                     if not ftp_path:
                         continue
-                    url = f"https://{ftp_path}" if not ftp_path.startswith("http") else ftp_path
+                    url = (
+                        f"https://{ftp_path}"
+                        if not ftp_path.startswith("http")
+                        else ftp_path
+                    )
                     filename = ftp_path.split("/")[-1]
                     ExternalResource.objects.update_or_create(
                         source_system=ExternalResource.SourceSystem.ENA,
@@ -293,12 +345,13 @@ class Command(BaseCommand):
                         },
                     )
 
-                logger.info(f"{'Created' if run_created else 'Skipped (already exists)'} Run {run_acc}")
+                logger.info(
+                    f"{'Created' if run_created else 'Skipped (already exists)'} "
+                    f"Run {run_acc}"
+                )
 
             logger.info(f"Ingested {len(runs_data)} run(s) for {fetch_acc}")
 
         self.stdout.write(
-            self.style.SUCCESS(
-                f"{'Created' if created else 'Updated'} Sample {sample}"
-            )
+            self.style.SUCCESS(f"{'Created' if created else 'Updated'} Sample {sample}")
         )

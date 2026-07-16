@@ -10,10 +10,7 @@ class ENAConfig:
     genome_query: str = "wgs_set"
     retry_count: int = 3
     timeout: int = 30
-    portal_api_output: dict = {
-        "format": "json",
-        "fields": ["all"]
-    }
+    portal_api_output: dict = {"format": "json", "fields": ["all"]}
     run_fields: list = [
         "run_accession",
         "experiment_accession",
@@ -26,7 +23,7 @@ class ENAConfig:
         "library_source",
         "library_strategy",
         "instrument_model",
-        "instrument_platform"
+        "instrument_platform",
     ]
     genome_fields: list = [
         "assembly_accession",
@@ -41,7 +38,7 @@ class ENAConfig:
         "RX": "experiment",
         "RS": "sample",
         "SAM": "biosample",
-        "GCA": "genome"
+        "GCA": "genome",
     }
 
 

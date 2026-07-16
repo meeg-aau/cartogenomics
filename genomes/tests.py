@@ -8,11 +8,14 @@ from external.models import ExternalResource
 from genomes.models import Genome, GenomeVersion
 from versions.models import IngestVersion
 
-
 GENOME_ACC = "GCA_123456789.1"
 BIOSAMPLE_ACC = "SAMEA123456"
 ENA_SAMPLE_ACC = "ERS123456"
 FASTA_FTP = "ftp.ebi.ac.uk/pub/databases/ena/wgs/public/abc/ABCD01.fasta.gz"
+
+GET_ALL_GENOME_ACCESSIONS = (
+    "genomes.management.commands.ingest_genome.ena_api.get_all_genome_accessions"
+)
 
 ACCESSIONS = {
     "genome_accession": GENOME_ACC,
@@ -36,7 +39,9 @@ CURATED_DATA = {
 }
 
 
-def _run_ingest(accession=GENOME_ACC, source="GTDB", version_label="gtdb_test", **kwargs):
+def _run_ingest(
+    accession=GENOME_ACC, source="GTDB", version_label="gtdb_test", **kwargs
+):
     call_command(
         "ingest_genome",
         accession=accession,
@@ -52,9 +57,18 @@ def _patch_apis(accessions=None, raw_data=None, curated_data=None):
     curated = curated_data if curated_data is not None else CURATED_DATA
 
     return (
-        patch("genomes.management.commands.ingest_genome.ena_api.get_all_genome_accessions", return_value=accs),
-        patch("genomes.management.commands.ingest_genome.get_basic_sample_data", return_value=raw),
-        patch("genomes.management.commands.ingest_genome.curate_biosample", return_value=curated),
+        patch(
+            GET_ALL_GENOME_ACCESSIONS,
+            return_value=accs,
+        ),
+        patch(
+            "genomes.management.commands.ingest_genome.get_basic_sample_data",
+            return_value=raw,
+        ),
+        patch(
+            "genomes.management.commands.ingest_genome.curate_biosample",
+            return_value=curated,
+        ),
     )
 
 
@@ -153,7 +167,9 @@ class GenomeVersioningTest(TestCase):
         self._ingest(curated_data={**CURATED_DATA, "completeness_score": 98.0})
 
         genome = Genome.objects.get(accession=GENOME_ACC)
-        open_versions = GenomeVersion.objects.filter(genome=genome, valid_to__isnull=True)
+        open_versions = GenomeVersion.objects.filter(
+            genome=genome, valid_to__isnull=True
+        )
         self.assertEqual(open_versions.count(), 1)
         self.assertEqual(open_versions.first().completeness, 98.0)
 
@@ -162,30 +178,51 @@ class ErrorHandlingTest(TestCase):
     """Command fails cleanly when API calls fail."""
 
     def test_ena_api_failure_raises_command_error(self):
-        with patch("genomes.management.commands.ingest_genome.ena_api.get_all_genome_accessions", side_effect=Exception("ENA down")):
+        with patch(
+            GET_ALL_GENOME_ACCESSIONS,
+            side_effect=Exception("ENA down"),
+        ):
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to get genome accessions", str(cm.exception))
 
     def test_no_genome_accession_raises_command_error(self):
         accs_no_genome = {**ACCESSIONS, "genome_accession": None}
-        with patch("genomes.management.commands.ingest_genome.ena_api.get_all_genome_accessions", return_value=accs_no_genome):
+        with patch(
+            GET_ALL_GENOME_ACCESSIONS,
+            return_value=accs_no_genome,
+        ):
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("No genome accession found", str(cm.exception))
 
     def test_biosample_fetch_failure_raises_command_error(self):
-        ena_patch = patch("genomes.management.commands.ingest_genome.ena_api.get_all_genome_accessions", return_value=ACCESSIONS)
-        bs_patch = patch("genomes.management.commands.ingest_genome.get_basic_sample_data", side_effect=Exception("timeout"))
+        ena_patch = patch(
+            GET_ALL_GENOME_ACCESSIONS,
+            return_value=ACCESSIONS,
+        )
+        bs_patch = patch(
+            "genomes.management.commands.ingest_genome.get_basic_sample_data",
+            side_effect=Exception("timeout"),
+        )
         with ena_patch, bs_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to fetch BioSample", str(cm.exception))
 
     def test_curation_failure_raises_command_error(self):
-        ena_patch = patch("genomes.management.commands.ingest_genome.ena_api.get_all_genome_accessions", return_value=ACCESSIONS)
-        bs_patch = patch("genomes.management.commands.ingest_genome.get_basic_sample_data", return_value=RAW_DATA)
-        curate_patch = patch("genomes.management.commands.ingest_genome.curate_biosample", side_effect=Exception("bad data"))
+        ena_patch = patch(
+            GET_ALL_GENOME_ACCESSIONS,
+            return_value=ACCESSIONS,
+        )
+        bs_patch = patch(
+            "genomes.management.commands.ingest_genome.get_basic_sample_data",
+            return_value=RAW_DATA,
+        )
+        curate_patch = patch(
+            "genomes.management.commands.ingest_genome.curate_biosample",
+            side_effect=Exception("bad data"),
+        )
         with ena_patch, bs_patch, curate_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()

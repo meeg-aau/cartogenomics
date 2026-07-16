@@ -9,25 +9,26 @@ from runs.models import Run
 from samples.models import Sample, SampleVersion
 from versions.models import IngestVersion
 
-
 BIOSAMPLE_ACC = "SAMEA123456"
 ENA_SAMPLE_ACC = "ERS123456"
 RUN_ACC = "ERR123456"
 FASTQ_FTP = "ftp.ebi.ac.uk/vol1/fastq/ERR123/ERR123456/ERR123456_1.fastq.gz"
 
-RUNS_DATA = [{
-    "run_accession": RUN_ACC,
-    "biosample": BIOSAMPLE_ACC,
-    "ena_sample": ENA_SAMPLE_ACC,
-    "read_count": 1000000,
-    "first_created": "2023-01-15T10:00:00Z",
-    "last_updated": "2023-06-01T00:00:00Z",
-    "fastq_ftp": FASTQ_FTP,
-    "library_source": "METAGENOMIC",
-    "library_strategy": "WGS",
-    "instrument_model": "Illumina NovaSeq 6000",
-    "instrument_platform": "ILLUMINA",
-}]
+RUNS_DATA = [
+    {
+        "run_accession": RUN_ACC,
+        "biosample": BIOSAMPLE_ACC,
+        "ena_sample": ENA_SAMPLE_ACC,
+        "read_count": 1000000,
+        "first_created": "2023-01-15T10:00:00Z",
+        "last_updated": "2023-06-01T00:00:00Z",
+        "fastq_ftp": FASTQ_FTP,
+        "library_source": "METAGENOMIC",
+        "library_strategy": "WGS",
+        "instrument_model": "Illumina NovaSeq 6000",
+        "instrument_platform": "ILLUMINA",
+    }
+]
 
 RAW_DATA = {
     "accession": BIOSAMPLE_ACC,
@@ -42,11 +43,17 @@ CURATED_DATA = {
     "locality": None,
     "geo_check_status": "PASS",
     "geo_check_reason": "match",
+    "reported_country_code": "DK",
+    "reverse_country_code": "DK",
+    "coordinates_reversed": False,
+    "coord_precision_deg": 0.01,
     "biome": "forest biome",
 }
 
 
-def _run_ingest(accession=BIOSAMPLE_ACC, source="MFD", version_label="mfd_test", **kwargs):
+def _run_ingest(
+    accession=BIOSAMPLE_ACC, source="MFD", version_label="mfd_test", **kwargs
+):
     call_command(
         "ingest_sample",
         accession=accession,
@@ -62,9 +69,18 @@ def _patch_apis(runs_data=None, raw_data=None, curated_data=None):
     curated = curated_data if curated_data is not None else CURATED_DATA
 
     return (
-        patch("samples.management.commands.ingest_sample.ena_api.get_all_run_accessions", return_value=runs),
-        patch("samples.management.commands.ingest_sample.get_basic_sample_data", return_value=raw),
-        patch("samples.management.commands.ingest_sample.curate_biosample", return_value=curated),
+        patch(
+            "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
+            return_value=runs,
+        ),
+        patch(
+            "samples.management.commands.ingest_sample.get_basic_sample_data",
+            return_value=raw,
+        ),
+        patch(
+            "samples.management.commands.ingest_sample.curate_biosample",
+            return_value=curated,
+        ),
     )
 
 
@@ -86,7 +102,15 @@ class SampleCreationTest(TestCase):
         self.assertIsNone(self.sample.locality)
         self.assertEqual(self.sample.geography_check_status, "PASS")
         self.assertEqual(self.sample.geography_status_reason, "match")
+        self.assertEqual(self.sample.inferred_country_code, "DK")
+        self.assertEqual(self.sample.coordinates_reversed, False)
+        self.assertEqual(self.sample.coord_precision_deg, 0.01)
         self.assertEqual(self.sample.ontology, "forest biome")
+
+    def test_sample_location_point(self):
+        self.assertIsNotNone(self.sample.location)
+        self.assertAlmostEqual(self.sample.location.x, 9.0)
+        self.assertAlmostEqual(self.sample.location.y, 56.0)
 
     def test_sample_archive_dates(self):
         self.assertIsNotNone(self.sample.archive_created)
@@ -110,13 +134,19 @@ class SampleCreationTest(TestCase):
         self.assertEqual(v.latitude, 56.0)
         self.assertEqual(v.ontology, "forest biome")
         self.assertEqual(v.ingest, self.sample.ingest)
+        self.assertEqual(v.inferred_country_code, "DK")
+        self.assertIsNotNone(v.location)
+        self.assertAlmostEqual(v.location.x, 9.0)
+        self.assertAlmostEqual(v.location.y, 56.0)
 
     def test_external_resource_for_sample(self):
         ext = ExternalResource.objects.get(
             source_system=ExternalResource.SourceSystem.BIOSAMPLES,
             sample=self.sample,
         )
-        self.assertEqual(ext.url, f"https://www.ebi.ac.uk/biosamples/samples/{BIOSAMPLE_ACC}.json")
+        self.assertEqual(
+            ext.url, f"https://www.ebi.ac.uk/biosamples/samples/{BIOSAMPLE_ACC}.json"
+        )
         self.assertIsNone(ext.run)
         self.assertIsNone(ext.genome)
         self.assertIsNotNone(ext.first_created_external)
@@ -159,7 +189,9 @@ class RunCreationTest(TestCase):
             _run_ingest(no_runs=True)
         self.assertEqual(Run.objects.count(), 0)
         self.assertEqual(
-            ExternalResource.objects.filter(source_system=ExternalResource.SourceSystem.ENA).count(),
+            ExternalResource.objects.filter(
+                source_system=ExternalResource.SourceSystem.ENA
+            ).count(),
             0,
         )
 
@@ -205,7 +237,9 @@ class SampleVersioningTest(TestCase):
         self._ingest(curated_data={**CURATED_DATA, "region": "Norway"})
 
         sample = Sample.objects.get(biosample=BIOSAMPLE_ACC)
-        open_versions = SampleVersion.objects.filter(sample=sample, valid_to__isnull=True)
+        open_versions = SampleVersion.objects.filter(
+            sample=sample, valid_to__isnull=True
+        )
         self.assertEqual(open_versions.count(), 1)
         self.assertEqual(open_versions.first().region, "Norway")
 
@@ -217,34 +251,94 @@ class SampleVersioningTest(TestCase):
         self.assertFalse(hasattr(version, "archive_updated"))
 
 
+class InferredCountryCodeTest(TestCase):
+    """inferred_country_code prefers the polygon-derived reverse code, falling
+    back to the reported code only when there were no coordinates to check."""
+
+    def _ingest_with(self, **overrides):
+        curated = {**CURATED_DATA, **overrides}
+        ena_patch, bs_patch, curate_patch = _patch_apis(curated_data=curated)
+        with ena_patch, bs_patch, curate_patch:
+            _run_ingest(no_runs=True)
+        return Sample.objects.get(biosample=BIOSAMPLE_ACC)
+
+    def test_uses_reverse_code_when_codes_match(self):
+        sample = self._ingest_with(
+            reported_country_code="DK", reverse_country_code="DK"
+        )
+        self.assertEqual(sample.inferred_country_code, "DK")
+
+    def test_prefers_reverse_code_on_mismatch(self):
+        sample = self._ingest_with(
+            reported_country_code="SE",
+            reverse_country_code="DK",
+            geo_check_status="FAIL",
+            geo_check_reason="country_mismatch",
+        )
+        self.assertEqual(sample.inferred_country_code, "DK")
+
+    def test_falls_back_to_reported_code_without_coordinates(self):
+        sample = self._ingest_with(
+            reported_country_code="DK",
+            reverse_country_code=None,
+            latitude=None,
+            longitude=None,
+            geo_check_status="SKIP",
+            geo_check_reason="no_coordinates",
+        )
+        self.assertEqual(sample.inferred_country_code, "DK")
+        self.assertIsNone(sample.location)
+
+
 class ErrorHandlingTest(TestCase):
     """Command fails cleanly when API calls fail."""
 
     def test_ena_api_failure_raises_command_error(self):
-        with patch("samples.management.commands.ingest_sample.ena_api.get_all_run_accessions", side_effect=Exception("ENA down")):
+        with patch(
+            "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
+            side_effect=Exception("ENA down"),
+        ):
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to get accessions", str(cm.exception))
 
     def test_biosample_fetch_failure_raises_command_error(self):
-        ena_patch = patch("samples.management.commands.ingest_sample.ena_api.get_all_run_accessions", return_value=RUNS_DATA)
-        bs_patch = patch("samples.management.commands.ingest_sample.get_basic_sample_data", side_effect=Exception("timeout"))
+        ena_patch = patch(
+            "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
+            return_value=RUNS_DATA,
+        )
+        bs_patch = patch(
+            "samples.management.commands.ingest_sample.get_basic_sample_data",
+            side_effect=Exception("timeout"),
+        )
         with ena_patch, bs_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to fetch BioSample", str(cm.exception))
 
     def test_curation_failure_raises_command_error(self):
-        ena_patch = patch("samples.management.commands.ingest_sample.ena_api.get_all_run_accessions", return_value=RUNS_DATA)
-        bs_patch = patch("samples.management.commands.ingest_sample.get_basic_sample_data", return_value=RAW_DATA)
-        curate_patch = patch("samples.management.commands.ingest_sample.curate_biosample", side_effect=Exception("bad data"))
+        ena_patch = patch(
+            "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
+            return_value=RUNS_DATA,
+        )
+        bs_patch = patch(
+            "samples.management.commands.ingest_sample.get_basic_sample_data",
+            return_value=RAW_DATA,
+        )
+        curate_patch = patch(
+            "samples.management.commands.ingest_sample.curate_biosample",
+            side_effect=Exception("bad data"),
+        )
         with ena_patch, bs_patch, curate_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to curate BioSample", str(cm.exception))
 
     def test_no_data_returned_raises_command_error(self):
-        ena_patch = patch("samples.management.commands.ingest_sample.ena_api.get_all_run_accessions", return_value=[])
+        ena_patch = patch(
+            "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
+            return_value=[],
+        )
         with ena_patch:
             with self.assertRaises(CommandError):
                 _run_ingest()

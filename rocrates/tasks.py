@@ -7,8 +7,8 @@ from celery import shared_task
 
 @shared_task
 def build_rocrate_task(job_id):
-    from rocrates.models import ExportJob
     from rocrates.builder import build_crate
+    from rocrates.models import ExportJob
 
     job = ExportJob.objects.get(id=job_id)
     job.status = ExportJob.Status.RUNNING
@@ -16,6 +16,7 @@ def build_rocrate_task(job_id):
 
     try:
         from rocrates.preview import generate_preview
+
         crate = build_crate(**job.params)
         output_path = f"/tmp/rocrate_{job_id}.zip"
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1,5 +1,6 @@
 from django.db import models
 
+
 class CartogenomicsRelease(models.Model):
     label = models.CharField(max_length=50, unique=True)
     notes = models.TextField(blank=True, default="")
@@ -8,12 +9,14 @@ class CartogenomicsRelease(models.Model):
     def __str__(self):
         return self.label
 
+
 class IngestVersion(models.Model):
     class SourceSystem(models.TextChoices):
         BIOSAMPLES = "BIOSAMPLES", "BioSamples"
         ENA = "ENA", "ENA"
         BIOSTUDIES = "BIOSTUDIES", "BioStudies"
         INTERNAL = "INTERNAL", "Internal"
+        NATURAL_EARTH = "NATURAL_EARTH", "Natural Earth"
 
     class DataType(models.TextChoices):
         SAMPLE_METADATA = "SAMPLE_METADATA", "Sample metadata"
@@ -22,6 +25,7 @@ class IngestVersion(models.Model):
         ABUNDANCE_RAW = "ABUNDANCE_RAW", "abundance raw"
         ABUNDANCE_PARQUET = "ABUNDANCE_PARQUET", "Abundance parquet"
         RO_CRATE = "RO_CRATE", "RO-crate"
+        COUNTRY_BOUNDARIES = "COUNTRY_BOUNDARIES", "Country boundaries"
 
     label = models.CharField(max_length=100)
 

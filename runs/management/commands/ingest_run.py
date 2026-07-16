@@ -4,12 +4,11 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from api_fetch.ena import ENAClient
+from external.models import ExternalResource
 from runs.models import Run
 from samples.models import Sample
-from versions.models import IngestVersion, CartogenomicsRelease
-from external.models import ExternalResource
-
-from api_fetch.ena import ENAClient
+from versions.models import CartogenomicsRelease, IngestVersion
 
 logger = logging.getLogger(__name__)
 ena_api = ENAClient()
@@ -119,7 +118,8 @@ class Command(BaseCommand):
         curated_defaults = {
             "sample": sample,
             "read_count": run_data.get("read_count"),
-            "sequencer": run_data.get("instrument_model") or run_data.get("instrument_platform"),
+            "sequencer": run_data.get("instrument_model")
+            or run_data.get("instrument_platform"),
             "library_source": run_data.get("library_source"),
             "library_strategy": run_data.get("library_strategy"),
         }
@@ -127,13 +127,20 @@ class Command(BaseCommand):
         try:
             existing = Run.objects.get(accession=run_acc)
             changed_fields = [
-                field for field, value in curated_defaults.items()
+                field
+                for field, value in curated_defaults.items()
                 if getattr(existing, field) != value
             ]
             if changed_fields:
-                logger.info(f"Run {run_acc} already exists (id={existing.pk}) - {len(changed_fields)} field(s) changed: {changed_fields}.")
+                logger.info(
+                    f"Run {run_acc} already exists (id={existing.pk}) - "
+                    f"{len(changed_fields)} field(s) changed: {changed_fields}."
+                )
             else:
-                logger.info(f"Run {run_acc} already exists (id={existing.pk}) - no fields changed.")
+                logger.info(
+                    f"Run {run_acc} already exists (id={existing.pk}) - "
+                    "no fields changed."
+                )
         except Run.DoesNotExist:
             logger.info(f"Run {run_acc} not found in DB - will be created.")
 
@@ -179,6 +186,9 @@ class Command(BaseCommand):
                 },
             )
 
-        self.stdout.write(self.style.SUCCESS(
-            f"{'Created' if created else 'Updated'} Run {run_acc} linked to Sample {sample}"
-        ))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"{'Created' if created else 'Updated'} Run {run_acc} "
+                f"linked to Sample {sample}"
+            )
+        )

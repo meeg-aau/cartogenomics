@@ -1,6 +1,6 @@
-
+from django.contrib.gis.db import models
 from django.core.exceptions import ValidationError
-from django.db import models
+
 from versions.models import IngestVersion
 
 
@@ -23,12 +23,22 @@ class Sample(models.Model):
         SKIP = "SKIP"
 
     class GeographyStatusReason(models.TextChoices):
+        #   kept in sync with sample_metadata_curation's
+        #   LocationCurator.geo_consistency_check() geo_check_reason values
         ocean_or_sea = "ocean_or_sea"
         no_coordinates = "no_coordinates"
+        null_island = "null_island"
+        identical_lat_long = "identical_lat_long"
+        coordinates_suspiciously_round = "coordinates_suspiciously_round"
+        implausibly_precise = "implausibly_precise"
+        centroid_or_capital = "centroid_or_capital"
+        known_institution = "known_institution"
+        match_territory = "match_territory"
+        small_island_not_in_reference = "small_island_not_in_reference"
         no_reported_country_code = "no_reported_country_code"
-        reverse_geocoder_no_result = "reverse_geocoder_no_result"
-        reported_cc_not_supported_by_reverse_geocoder = "reported_cc_not_supported_by_reverse_geocoder"
+        disputed_or_unrecognised_territory = "disputed_or_unrecognised_territory"
         match = "match"
+        match_near_border = "match_near_border"
         country_mismatch = "country_mismatch"
 
     class SourceDataset(models.TextChoices):
@@ -36,10 +46,24 @@ class Sample(models.Model):
         GTDB = "GTDB"
         ENA = "ENA"
 
-    ena_sample = models.CharField(max_length=50, null=True, blank=True, unique=True, validators=[validate_ena_sample])
-    biosample = models.CharField(max_length=50, null=True, blank=True, unique=True, validators=[validate_biosample])
+    ena_sample = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        unique=True,
+        validators=[validate_ena_sample],
+    )
+    biosample = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        unique=True,
+        validators=[validate_biosample],
+    )
 
-    source_dataset = models.CharField(max_length=50, default="", choices=SourceDataset.choices)
+    source_dataset = models.CharField(
+        max_length=50, default="", choices=SourceDataset.choices
+    )
 
     ingest = models.ForeignKey(
         IngestVersion,
@@ -54,8 +78,16 @@ class Sample(models.Model):
     region = models.CharField(max_length=1000, null=True, blank=True)
     locality = models.CharField(max_length=1000, null=True, blank=True)
     ontology = models.CharField(null=True, blank=True)
-    geography_check_status = models.CharField(max_length=1000, null=True, blank=True, choices=GeographyCheckStatus.choices)
-    geography_status_reason = models.CharField(max_length=1000, null=True, blank=True, choices=GeographyStatusReason.choices)
+    location = models.PointField(null=True, blank=True, srid=4326, geography=True)
+    geography_check_status = models.CharField(
+        max_length=1000, null=True, blank=True, choices=GeographyCheckStatus.choices
+    )
+    geography_status_reason = models.CharField(
+        max_length=1000, null=True, blank=True, choices=GeographyStatusReason.choices
+    )
+    inferred_country_code = models.CharField(max_length=2, null=True, blank=True)
+    coordinates_reversed = models.BooleanField(null=True, blank=True)
+    coord_precision_deg = models.FloatField(null=True, blank=True)
 
     raw_metadata = models.JSONField(default=dict, blank=True)
 
@@ -70,7 +102,8 @@ class Sample(models.Model):
 
 
 class SampleVersion(models.Model):
-    """Immutable snapshot of a Sample's curated fields at each ingest where fields changed."""
+    """Immutable snapshot of a Sample's curated fields at each ingest where
+    fields changed."""
 
     sample = models.ForeignKey(
         Sample,
@@ -90,11 +123,15 @@ class SampleVersion(models.Model):
     source_dataset = models.CharField(max_length=50, default="")
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
+    location = models.PointField(null=True, blank=True, srid=4326, geography=True)
     region = models.CharField(max_length=1000, null=True, blank=True)
     locality = models.CharField(max_length=1000, null=True, blank=True)
     ontology = models.CharField(null=True, blank=True)
     geography_check_status = models.CharField(max_length=1000, null=True, blank=True)
     geography_status_reason = models.CharField(max_length=1000, null=True, blank=True)
+    inferred_country_code = models.CharField(max_length=2, null=True, blank=True)
+    coordinates_reversed = models.BooleanField(null=True, blank=True)
+    coord_precision_deg = models.FloatField(null=True, blank=True)
     raw_metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
