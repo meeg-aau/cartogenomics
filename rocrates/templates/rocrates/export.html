@@ -59,6 +59,33 @@
               <input type="number" step="any" name="lon_max" class="form-control" placeholder="e.g. 15.0">
             </div>
           </div>
+          <div class="mb-2">
+            <span class="form-label d-block mb-0">Radius search <span class="text-muted">(near a point)</span></span>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-6 col-sm-4">
+              <label class="form-label">Center lat</label>
+              <input type="number" step="any" name="near_lat" class="form-control" placeholder="e.g. 55.7">
+            </div>
+            <div class="col-6 col-sm-4">
+              <label class="form-label">Center lon</label>
+              <input type="number" step="any" name="near_lon" class="form-control" placeholder="e.g. 12.3">
+            </div>
+            <div class="col-12 col-sm-4">
+              <label class="form-label">Radius (km)</label>
+              <input type="number" step="any" min="0" name="radius_km" class="form-control" placeholder="e.g. 50">
+            </div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label class="form-label">Country code <span class="text-muted">(ISO 3166-1 alpha-2)</span></label>
+              <input type="text" name="country_code" class="form-control" maxlength="2" placeholder="e.g. DK">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Custom polygon <span class="text-muted">(WKT or GeoJSON)</span></label>
+            <textarea name="polygon" class="form-control" rows="3" placeholder="POLYGON((...)) or {&quot;type&quot;: &quot;Polygon&quot;, ...}"></textarea>
+          </div>
           <div class="form-check">
             <input class="form-check-input" type="checkbox" name="include_runs" id="include_runs" checked>
             <label class="form-check-label" for="include_runs">Include sequencing runs</label>
@@ -104,8 +131,8 @@
         </div>
         <div id="abundance-fields" class="d-none">
           <div>
-            <label class="form-label">Minimum abundance threshold <span class="text-muted">(0 = any detection)</span></label>
-            <input type="number" step="any" min="0" max="1" name="min_abundance" class="form-control" style="max-width: 200px;" placeholder="0.0">
+            <label class="form-label">Minimum abundance threshold (%) <span class="text-muted">(0 = any detection)</span></label>
+            <input type="number" step="any" min="0" max="100" name="min_abundance" class="form-control" style="max-width: 200px;" placeholder="0.0">
           </div>
         </div>
       </div>

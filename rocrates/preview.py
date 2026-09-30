@@ -389,7 +389,9 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
     for genome_id, run_id, abund in rows:
         bs = run_to_sample.get(run_id, run_id)
         sample_abund.setdefault(bs, {})
-        pct = round(float(abund) * 100, 1)
+        #   abundance values in the Parquet are already 0-100 percentages,
+        #   not 0-1 fractions - don't multiply again
+        pct = round(float(abund), 1)
         if pct > sample_abund[bs].get(genome_id, 0):
             sample_abund[bs][genome_id] = pct
 
@@ -401,9 +403,9 @@ def _sec_abundance(genomes: list, runs: list, samples: list, abundance_file) -> 
                 "locality": sample_meta.get(bs, {}).get("locality", ""),
                 "lat": sample_meta.get(bs, {}).get("lat"),
                 "lon": sample_meta.get(bs, {}).get("lon"),
-                "abund": sample_abund.get(bs, {}),
+                "abund": sample_abund[bs],
             }
-            for bs in sample_meta
+            for bs in sample_abund
         ]
     )
     js_genomes = json.dumps(
