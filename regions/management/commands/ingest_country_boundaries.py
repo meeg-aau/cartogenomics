@@ -104,7 +104,9 @@ class Command(BaseCommand):
                 shp_path,
                 COUNTRY_BOUNDARY_MAPPING,
             )
-            lm.save(strict=True, verbose=options["verbosity"] > 1)
+            #   skip disputed territories (ISO_A2_EH="-99") instead of
+            #   aborting the whole import on the first one
+            lm.save(strict=False, verbose=options["verbosity"] > 1)
             #   LayerMapping's mapping dict only covers fields present in the
             #   shapefile, so attach ingest provenance to the newly created rows
             #   in a single follow-up update
