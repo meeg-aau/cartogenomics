@@ -128,6 +128,10 @@ class Command(BaseCommand):
         except Exception as exc:
             raise CommandError(f"Failed to build crate: {exc}") from exc
 
+        self.stdout.write(
+            f"Found {crate.sample_count} sample(s), {crate.genome_count} genome(s)"
+        )
+
         output_path = os.path.abspath(options["output"])
 
         with tempfile.TemporaryDirectory() as tmpdir:

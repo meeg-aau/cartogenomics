@@ -28,9 +28,10 @@ def build_rocrate_task(job_id):
                         abs_path = os.path.join(root, fname)
                         zf.write(abs_path, os.path.relpath(abs_path, tmpdir))
         job.output_path = output_path
+        job.summary = f"{crate.sample_count} sample(s), {crate.genome_count} genome(s)"
         job.status = ExportJob.Status.COMPLETE
     except Exception as e:
         job.status = ExportJob.Status.FAILED
         job.error = str(e)
 
-    job.save(update_fields=["status", "output_path", "error"])
+    job.save(update_fields=["status", "output_path", "error", "summary"])

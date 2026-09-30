@@ -27,6 +27,7 @@
   {% elif job.status == "complete" %}
   <div class="alert alert-success">
     <strong>Done.</strong> Your RO-Crate is ready.
+    {% if job.summary %}<div class="small mt-1">{{ job.summary }}</div>{% endif %}
   </div>
   <a href="{% url 'rocrate_download' job.id %}" class="btn btn-success btn-lg">
     Download rocrate_{{ job.id }}.zip
@@ -35,7 +36,7 @@
   <div class="alert alert-danger">
     <strong>Export failed.</strong>
     {% if job.error %}
-    <pre class="mt-2 mb-0 small">{{ job.error }}</pre>
+    <pre class="mt-2 mb-0 small" style="white-space: pre-wrap; word-break: break-word;">{{ job.error }}</pre>
     {% endif %}
   </div>
   <a href="{% url 'rocrate_export' %}" class="btn btn-secondary">Try again</a>

@@ -118,7 +118,16 @@ class CrateBuilder:
 
     def build(self) -> ROCrate:
         self._resolve_querysets()  # query DB, populate samples and genomes
+        logger.info(
+            "Crate build resolved %d sample(s) and %d genome(s)",
+            len(self.samples),
+            len(self.genomes),
+        )
         self.crate = ROCrate()  # create an empty crate
+        #   surfaced to callers (CLI/status page) so a "0 found" export
+        #   is visible instead of just producing an empty-looking crate
+        self.crate.sample_count = len(self.samples)
+        self.crate.genome_count = len(self.genomes)
         self._add_cartogenomics_db_entity()
         self._add_export_action()  # set a timestamp for export
         self._set_root_metadata()
@@ -290,6 +299,13 @@ class CrateBuilder:
         genome_accessions = list(
             self.genome_queryset.values_list("accession", flat=True)
         )
+        if not genome_accessions:
+            con.close()
+            logger.warning(
+                "No genomes matched the genome filters; skipping abundance cross-filtering"
+            )
+            return self.sample_queryset, self.genome_queryset.none()
+
         col_select = ", ".join(f'"{r}"' for r in matching_runs)
         genome_list = ", ".join(f"'{v}'" for v in genome_accessions)
 
@@ -311,7 +327,9 @@ class CrateBuilder:
         ).fetchone()
         con.close()
 
-        present_genomes = result[0] if result else []
+        #   array_agg() over zero matching rows returns NULL, not an empty
+        #   array - `result` is still a truthy (None,) tuple in that case
+        present_genomes = result[0] if result and result[0] is not None else []
         return self.sample_queryset, self.genome_queryset.filter(
             accession__in=present_genomes
         )

@@ -17,6 +17,7 @@ class ExportJob(models.Model):
     params = models.JSONField()
     output_path = models.CharField(max_length=500, blank=True)
     error = models.TextField(blank=True)
+    summary = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
