@@ -10,10 +10,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 
-from regions.management.commands.ingest_country_boundaries import (
-    INGEST_VERSION_LABEL,
-    NATURAL_EARTH_URL,
-)
+from regions.management.commands.ingest_country_boundaries import NATURAL_EARTH_URL
 from regions.models import CountryBoundary
 from versions.models import IngestVersion
 
@@ -107,7 +104,7 @@ class IngestCountryBoundariesCommandTest(TestCase):
         version = IngestVersion.objects.get(
             source_system=IngestVersion.SourceSystem.NATURAL_EARTH,
             data_type=IngestVersion.DataType.COUNTRY_BOUNDARIES,
-            label=INGEST_VERSION_LABEL,
+            label="5.1.1",
         )
         self.assertEqual(version.upstream_version, "5.1.1")
 
@@ -125,7 +122,7 @@ class IngestCountryBoundariesCommandTest(TestCase):
         version = IngestVersion.objects.get(
             source_system=IngestVersion.SourceSystem.NATURAL_EARTH,
             data_type=IngestVersion.DataType.COUNTRY_BOUNDARIES,
-            label=INGEST_VERSION_LABEL,
+            label="5.1.1",
         )
         self.assertEqual(version.upstream_version, "5.1.1")
 
@@ -153,7 +150,7 @@ class IngestCountryBoundariesCommandTest(TestCase):
 
         boundary = CountryBoundary.objects.get(iso_two_cc="DK")
         self.assertIsNotNone(boundary.ingest)
-        self.assertEqual(boundary.ingest.label, INGEST_VERSION_LABEL)
+        self.assertEqual(boundary.ingest.label, "5.1.1")
 
     def test_missing_source_raises_command_error(self):
         with self.assertRaises(CommandError):

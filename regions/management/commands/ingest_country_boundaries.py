@@ -8,18 +8,12 @@ import requests
 from django.conf import settings
 from django.contrib.gis.utils import LayerMapping
 from django.core.management.base import BaseCommand, CommandError
+from sample_metadata_curation.install_resources import NATURAL_EARTH_URL
 
 from regions.models import CountryBoundary
 from versions.models import IngestVersion
 
 logger = logging.getLogger(__name__)
-
-
-NATURAL_EARTH_URL = (
-    "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_admin_0_countries.zip"
-)
-
-INGEST_VERSION_LABEL = "ne_10m_admin_0_countries"
 
 COUNTRY_BOUNDARY_MAPPING = {
     "iso_two_cc": "ISO_A2_EH",
@@ -95,7 +89,7 @@ class Command(BaseCommand):
             version, _ = IngestVersion.objects.update_or_create(
                 source_system=IngestVersion.SourceSystem.NATURAL_EARTH,
                 data_type=IngestVersion.DataType.COUNTRY_BOUNDARIES,
-                label=INGEST_VERSION_LABEL,
+                label=upstream_version,
                 defaults={"upstream_version": upstream_version},
             )
 

@@ -32,8 +32,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--pipeline-version",
             "-pv",
-            default="sample_metadata_curation 0.1.0",
-            help='Pipeline version, e.g. "sample_metadata_curation 0.1.0"',
+            default=None,
+            help=(
+                "Pipeline version used for curation or processing. "
+                "Defaults to whatever SAMBAL version is currently installed."
+            ),
         )
         parser.add_argument(
             "--release-label",

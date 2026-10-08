@@ -17,6 +17,8 @@ class IngestVersion(models.Model):
         BIOSTUDIES = "BIOSTUDIES", "BioStudies"
         INTERNAL = "INTERNAL", "Internal"
         NATURAL_EARTH = "NATURAL_EARTH", "Natural Earth"
+        COORDINATE_CLEANER = "COORDINATE_CLEANER", "CoordinateCleaner"
+        ROR = "ROR", "Research Organization Registry"
 
     class DataType(models.TextChoices):
         SAMPLE_METADATA = "SAMPLE_METADATA", "Sample metadata"
@@ -26,6 +28,8 @@ class IngestVersion(models.Model):
         ABUNDANCE_PARQUET = "ABUNDANCE_PARQUET", "Abundance parquet"
         RO_CRATE = "RO_CRATE", "RO-crate"
         COUNTRY_BOUNDARIES = "COUNTRY_BOUNDARIES", "Country boundaries"
+        #  used internally by curation, not ingested as its own cartogenomics record"
+        REFERENCE_DATA = "REFERENCE_DATA", "Reference data"
 
     label = models.CharField(max_length=100)
 

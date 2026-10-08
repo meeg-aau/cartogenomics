@@ -50,6 +50,8 @@ CURATED_DATA = {
     "biome": "forest biome",
 }
 
+FAKE_MANIFEST = {"tool": {"name": "SAMBAL", "version": "0.1.0"}, "inputs": {}}
+
 
 def _run_ingest(
     accession=BIOSAMPLE_ACC, source="MFD", version_label="mfd_test", **kwargs
@@ -81,6 +83,10 @@ def _patch_apis(runs_data=None, raw_data=None, curated_data=None):
             "samples.management.commands.ingest_sample.curate_biosample",
             return_value=curated,
         ),
+        patch(
+            "samples.management.commands.ingest_sample.load_curation_manifest",
+            return_value=FAKE_MANIFEST,
+        ),
     )
 
 
@@ -88,8 +94,8 @@ class SampleCreationTest(TestCase):
     """Sample, IngestVersion, and SampleVersion are correct after first ingest."""
 
     def setUp(self):
-        ena_patch, bs_patch, curate_patch = _patch_apis()
-        with ena_patch, bs_patch, curate_patch:
+        ena_patch, bs_patch, curate_patch, manifest_patch = _patch_apis()
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             _run_ingest(no_runs=True)
         self.sample = Sample.objects.get(biosample=BIOSAMPLE_ACC)
 
@@ -123,7 +129,7 @@ class SampleCreationTest(TestCase):
         self.assertEqual(version.source_system, IngestVersion.SourceSystem.BIOSAMPLES)
         self.assertEqual(version.data_type, IngestVersion.DataType.SAMPLE_METADATA)
         self.assertEqual(version.label, "mfd_test")
-        self.assertEqual(version.pipeline_version, "sample_metadata_curation 0.1.0")
+        self.assertEqual(version.pipeline_version, "SAMBAL 0.1.0")
         self.assertIsNotNone(version.ingested_on)
 
     def test_sample_version_created(self):
@@ -157,8 +163,8 @@ class RunCreationTest(TestCase):
     """Run and FASTQ ExternalResource rows are correct after ingest."""
 
     def setUp(self):
-        ena_patch, bs_patch, curate_patch = _patch_apis()
-        with ena_patch, bs_patch, curate_patch:
+        ena_patch, bs_patch, curate_patch, manifest_patch = _patch_apis()
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             _run_ingest()
 
     def test_run_created(self):
@@ -184,8 +190,8 @@ class RunCreationTest(TestCase):
 
     def test_no_runs_flag_skips_runs(self):
         Run.objects.all().delete()
-        ena_patch, bs_patch, curate_patch = _patch_apis()
-        with ena_patch, bs_patch, curate_patch:
+        ena_patch, bs_patch, curate_patch, manifest_patch = _patch_apis()
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             _run_ingest(no_runs=True)
         self.assertEqual(Run.objects.count(), 0)
         self.assertEqual(
@@ -196,8 +202,8 @@ class RunCreationTest(TestCase):
         )
 
     def test_run_not_duplicated_on_reingest(self):
-        ena_patch, bs_patch, curate_patch = _patch_apis()
-        with ena_patch, bs_patch, curate_patch:
+        ena_patch, bs_patch, curate_patch, manifest_patch = _patch_apis()
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             _run_ingest()
         self.assertEqual(Run.objects.filter(accession=RUN_ACC).count(), 1)
 
@@ -206,8 +212,10 @@ class SampleVersioningTest(TestCase):
     """SampleVersion history is correct across multiple ingests."""
 
     def _ingest(self, curated_data=None):
-        ena_patch, bs_patch, curate_patch = _patch_apis(curated_data=curated_data)
-        with ena_patch, bs_patch, curate_patch:
+        ena_patch, bs_patch, curate_patch, manifest_patch = _patch_apis(
+            curated_data=curated_data
+        )
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             _run_ingest(no_runs=True)
 
     def test_reingest_with_changed_field_creates_new_version(self):
@@ -257,8 +265,10 @@ class InferredCountryCodeTest(TestCase):
 
     def _ingest_with(self, **overrides):
         curated = {**CURATED_DATA, **overrides}
-        ena_patch, bs_patch, curate_patch = _patch_apis(curated_data=curated)
-        with ena_patch, bs_patch, curate_patch:
+        ena_patch, bs_patch, curate_patch, manifest_patch = _patch_apis(
+            curated_data=curated
+        )
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             _run_ingest(no_runs=True)
         return Sample.objects.get(biosample=BIOSAMPLE_ACC)
 
@@ -294,10 +304,15 @@ class ErrorHandlingTest(TestCase):
     """Command fails cleanly when API calls fail."""
 
     def test_ena_api_failure_raises_command_error(self):
-        with patch(
+        manifest_patch = patch(
+            "samples.management.commands.ingest_sample.load_curation_manifest",
+            return_value=FAKE_MANIFEST,
+        )
+        ena_patch = patch(
             "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
             side_effect=Exception("ENA down"),
-        ):
+        )
+        with manifest_patch, ena_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to get accessions", str(cm.exception))
@@ -311,7 +326,11 @@ class ErrorHandlingTest(TestCase):
             "samples.management.commands.ingest_sample.get_basic_sample_data",
             side_effect=Exception("timeout"),
         )
-        with ena_patch, bs_patch:
+        manifest_patch = patch(
+            "samples.management.commands.ingest_sample.load_curation_manifest",
+            return_value=FAKE_MANIFEST,
+        )
+        with ena_patch, bs_patch, manifest_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to fetch BioSample", str(cm.exception))
@@ -329,7 +348,11 @@ class ErrorHandlingTest(TestCase):
             "samples.management.commands.ingest_sample.curate_biosample",
             side_effect=Exception("bad data"),
         )
-        with ena_patch, bs_patch, curate_patch:
+        manifest_patch = patch(
+            "samples.management.commands.ingest_sample.load_curation_manifest",
+            return_value=FAKE_MANIFEST,
+        )
+        with ena_patch, bs_patch, curate_patch, manifest_patch:
             with self.assertRaises(CommandError) as cm:
                 _run_ingest()
         self.assertIn("Failed to curate BioSample", str(cm.exception))
@@ -339,6 +362,10 @@ class ErrorHandlingTest(TestCase):
             "samples.management.commands.ingest_sample.ena_api.get_all_run_accessions",
             return_value=[],
         )
-        with ena_patch:
+        manifest_patch = patch(
+            "samples.management.commands.ingest_sample.load_curation_manifest",
+            return_value=FAKE_MANIFEST,
+        )
+        with ena_patch, manifest_patch:
             with self.assertRaises(CommandError):
                 _run_ingest()

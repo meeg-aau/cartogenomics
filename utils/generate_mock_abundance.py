@@ -26,20 +26,53 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 logger = logging.getLogger(__name__)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate mock abundance Parquet file")
-    parser.add_argument("--output", "-o", default="mock_abundance.parquet", help="Output Parquet file path")
-    parser.add_argument("--genomes", type=int, default=4000, help="Number of genome rows (ignored if --genome-accessions given)")
-    parser.add_argument("--runs", type=int, default=10000, help="Number of run columns (ignored if --run-accessions given)")
-    parser.add_argument("--genome-accessions", help="CSV file of real genome accessions (one per line, no header)")
-    parser.add_argument("--run-accessions", help="CSV file of real run accessions (one per line, no header)")
-    parser.add_argument("--sparsity", type=float, default=0.90, help="Fraction of zero values (0–1)")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    parser.add_argument("--tsv", action="store_true", help="Also write a TSV copy alongside the Parquet file")
+    parser.add_argument(
+        "--output",
+        "-o",
+        default="mock_abundance.parquet",
+        help="Output Parquet file path",
+    )
+    parser.add_argument(
+        "--genomes",
+        type=int,
+        default=4000,
+        help="Number of genome rows (ignored if --genome-accessions given)",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=10000,
+        help="Number of run columns (ignored if --run-accessions given)",
+    )
+    parser.add_argument(
+        "--genome-accessions",
+        help="CSV file of real genome accessions (one per line, no header)",
+    )
+    parser.add_argument(
+        "--run-accessions",
+        help="CSV file of real run accessions (one per line, no header)",
+    )
+    parser.add_argument(
+        "--sparsity", type=float, default=0.90, help="Fraction of zero values (0–1)"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--tsv",
+        action="store_true",
+        help="Also write a TSV copy alongside the Parquet file",
+    )
     return parser.parse_args()
 
 
@@ -54,7 +87,9 @@ def generate_accessions(n_genomes: int, n_runs: int):
     return genomes, runs
 
 
-def generate_matrix(n_genomes: int, n_runs: int, sparsity: float, seed: int) -> np.ndarray:
+def generate_matrix(
+    n_genomes: int, n_runs: int, sparsity: float, seed: int
+) -> np.ndarray:
     rng = np.random.default_rng(seed)
     logger.info(f"Generating {n_genomes} × {n_runs} matrix ({sparsity:.0%} sparse)")
     t0 = time.time()
@@ -65,12 +100,15 @@ def generate_matrix(n_genomes: int, n_runs: int, sparsity: float, seed: int) -> 
 
     non_zero = np.count_nonzero(matrix)
     total = n_genomes * n_runs
-    logger.info(f"Matrix generated in {time.time() - t0:.2f}s — {non_zero:,} non-zero values ({non_zero/total:.1%})")
+    logger.info(
+        f"Matrix generated in {time.time() - t0:.2f}s — {non_zero:,} "
+        f"non-zero values ({non_zero/total:.1%})"
+    )
     return matrix
 
 
 def write_parquet(matrix: np.ndarray, genomes: list, runs: list, output: str):
-    logger.info(f"Building DataFrame")
+    logger.info("Building DataFrame")
     t0 = time.time()
     df = pd.DataFrame(matrix, index=genomes, columns=runs)
     df.index.name = "genome_id"
@@ -80,7 +118,9 @@ def write_parquet(matrix: np.ndarray, genomes: list, runs: list, output: str):
     pq.write_table(table, output, compression="snappy")
 
     size_mb = table.nbytes / 1024 / 1024
-    logger.info(f"Done in {time.time() - t0:.2f}s — uncompressed size ~{size_mb:.1f} MB")
+    logger.info(
+        f"Done in {time.time() - t0:.2f}s — uncompressed size ~{size_mb:.1f} MB"
+    )
     return df
 
 
@@ -97,7 +137,9 @@ def main():
 
     if args.genome_accessions:
         genomes = load_accessions_from_csv(args.genome_accessions)
-        logger.info(f"Loaded {len(genomes)} genome accessions from {args.genome_accessions}")
+        logger.info(
+            f"Loaded {len(genomes)} genome accessions from {args.genome_accessions}"
+        )
     else:
         genomes, _ = generate_accessions(args.genomes, args.runs)
 

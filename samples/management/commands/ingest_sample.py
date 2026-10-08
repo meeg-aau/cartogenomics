@@ -14,6 +14,11 @@ from api_fetch.ena import ENAClient
 from external.models import ExternalResource
 from runs.models import Run
 from samples.models import Sample, SampleVersion
+from versions.manifest import (
+    load_curation_manifest,
+    pipeline_version_from_manifest,
+    sync_reference_source_versions,
+)
 from versions.models import CartogenomicsRelease, IngestVersion
 
 logger = logging.getLogger(__name__)
@@ -49,10 +54,11 @@ class Command(BaseCommand):
             "--pipeline-version",
             "-pv",
             type=str,
-            default="sample_metadata_curation 0.1.0",
+            default=None,
             help=(
-                "Pipeline version used for curation or processing, "
-                'e.g. "sample_metadata_curation 0.1.0"'
+                "Pipeline version used for curation or processing. "
+                "Defaults to whatever SAMBAL version is currently installed, "
+                'e.g. "SAMBAL 0.1.0".'
             ),
         )
         parser.add_argument(
@@ -73,9 +79,14 @@ class Command(BaseCommand):
         accession = opts["accession"]
         source_dataset = opts["source"]
         version_label = opts["version_label"]
-        pipeline_version = opts["pipeline_version"]
         release_label = opts["release_label"]
         no_runs = opts["no_runs"]
+
+        manifest = load_curation_manifest()
+        pipeline_version = opts["pipeline_version"] or pipeline_version_from_manifest(
+            manifest
+        )
+        sync_reference_source_versions(manifest)
 
         logger.info(f"Starting ingest for accession: {accession}")
 
