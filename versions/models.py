@@ -54,3 +54,35 @@ class IngestVersion(models.Model):
 
     def __str__(self):
         return f"{self.source_system}:{self.label}"
+
+
+class IngestJob(models.Model):
+    """
+    Tracks an async bulk-ingest run (samples or genomes) submitted via Celery.
+    Mirrors rocrates.ExportJob's role for the ingestion side.
+    """
+
+    class Kind(models.TextChoices):
+        SAMPLES = "SAMPLES", "Samples"
+        GENOMES = "GENOMES", "Genomes"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        COMPLETE = "COMPLETE", "Complete"
+        FAILED = "FAILED", "Failed"
+
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    params = models.JSONField()
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    total = models.IntegerField(default=0)
+    success_count = models.IntegerField(default=0)
+    failed_count = models.IntegerField(default=0)
+    errors = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.kind} job {self.pk} ({self.status})"

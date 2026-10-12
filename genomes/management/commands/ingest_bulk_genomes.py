@@ -42,6 +42,16 @@ class Command(BaseCommand):
             help="Continue processing remaining accessions if one fails",
             default=True,
         )
+        parser.add_argument(
+            "--async",
+            action="store_true",
+            dest="run_async",
+            help=(
+                "Queue the batch as a Celery task and return immediately instead "
+                "of running inline. Progress/results are tracked on the "
+                "IngestJob row (see Django admin)."
+            ),
+        )
 
     def handle(self, *args, **options):
         file_path = options["file"]
@@ -50,11 +60,37 @@ class Command(BaseCommand):
         pipeline_version = options["pipeline_version"]
         release_label = options["release_label"]
         continue_on_error = options["continue_on_error"]
+        run_async = options["run_async"]
 
         with open(file_path) as f:
             accessions = [x.strip() for x in f if x.strip() and not x.startswith("#")]
 
         total = len(accessions)
+
+        if run_async:
+            from genomes.tasks import ingest_bulk_genomes_task
+            from versions.models import IngestJob
+
+            job = IngestJob.objects.create(
+                kind=IngestJob.Kind.GENOMES,
+                total=total,
+                params={
+                    "accessions": accessions,
+                    "source": source,
+                    "version_label": version_label,
+                    "pipeline_version": pipeline_version,
+                    "release_label": release_label,
+                },
+            )
+            ingest_bulk_genomes_task.delay(job.id)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Queued IngestJob {job.id} ({total} accession(s)). "
+                    "Check Django admin for progress/results."
+                )
+            )
+            return
+
         self.stdout.write(f"Processing {total} genome accessions")
 
         success = 0
