@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CartogenomicsRelease, IngestVersion
+from .models import CartogenomicsRelease, IngestJob, IngestVersion
 
 
 @admin.register(IngestVersion)
@@ -13,3 +13,28 @@ class IngestVersionAdmin(admin.ModelAdmin):
 class CartogenomicsReleaseAdmin(admin.ModelAdmin):
     list_display = ("label", "created_at")
     search_fields = ("label",)
+
+
+@admin.register(IngestJob)
+class IngestJobAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "kind",
+        "status",
+        "total",
+        "success_count",
+        "failed_count",
+        "created_at",
+    )
+    list_filter = ("kind", "status")
+    readonly_fields = (
+        "kind",
+        "params",
+        "status",
+        "total",
+        "success_count",
+        "failed_count",
+        "errors",
+        "created_at",
+        "finished_at",
+    )
