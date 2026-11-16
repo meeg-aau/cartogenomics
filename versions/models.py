@@ -1,0 +1,88 @@
+from django.db import models
+
+
+class CartogenomicsRelease(models.Model):
+    label = models.CharField(max_length=50, unique=True)
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.label
+
+
+class IngestVersion(models.Model):
+    class SourceSystem(models.TextChoices):
+        BIOSAMPLES = "BIOSAMPLES", "BioSamples"
+        ENA = "ENA", "ENA"
+        BIOSTUDIES = "BIOSTUDIES", "BioStudies"
+        INTERNAL = "INTERNAL", "Internal"
+        NATURAL_EARTH = "NATURAL_EARTH", "Natural Earth"
+        COORDINATE_CLEANER = "COORDINATE_CLEANER", "CoordinateCleaner"
+        ROR = "ROR", "Research Organization Registry"
+
+    class DataType(models.TextChoices):
+        SAMPLE_METADATA = "SAMPLE_METADATA", "Sample metadata"
+        READS = "READS", "reads"
+        GENOMES = "GENOME", "genome"
+        ABUNDANCE_RAW = "ABUNDANCE_RAW", "abundance raw"
+        ABUNDANCE_PARQUET = "ABUNDANCE_PARQUET", "Abundance parquet"
+        RO_CRATE = "RO_CRATE", "RO-crate"
+        COUNTRY_BOUNDARIES = "COUNTRY_BOUNDARIES", "Country boundaries"
+        #  used internally by curation, not ingested as its own cartogenomics record"
+        REFERENCE_DATA = "REFERENCE_DATA", "Reference data"
+
+    label = models.CharField(max_length=100)
+
+    source_system = models.CharField(max_length=32, choices=SourceSystem.choices)
+    data_type = models.CharField(max_length=32, choices=DataType.choices)
+    upstream_version = models.CharField(max_length=100, blank=True, default="")
+    pipeline_version = models.CharField(max_length=100, blank=True, default="")
+
+    release = models.ForeignKey(
+        CartogenomicsRelease,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="ingests",
+    )
+
+    ingested_on = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        unique_together = ("source_system", "data_type", "label")
+
+    def __str__(self):
+        return f"{self.source_system}:{self.label}"
+
+
+class IngestJob(models.Model):
+    """
+    Tracks an async bulk-ingest run (samples or genomes) submitted via Celery.
+    Mirrors rocrates.ExportJob's role for the ingestion side.
+    """
+
+    class Kind(models.TextChoices):
+        SAMPLES = "SAMPLES", "Samples"
+        GENOMES = "GENOMES", "Genomes"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        COMPLETE = "COMPLETE", "Complete"
+        FAILED = "FAILED", "Failed"
+
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    params = models.JSONField()
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    total = models.IntegerField(default=0)
+    success_count = models.IntegerField(default=0)
+    failed_count = models.IntegerField(default=0)
+    errors = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.kind} job {self.pk} ({self.status})"
